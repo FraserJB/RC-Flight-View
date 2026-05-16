@@ -5,6 +5,12 @@ block_cipher = None
 added_files = [
     ('splash.png', '.'),
     ('defaults.cfg', '.'),
+    ('defaults_ardu.cfg', '.'),
+    ('defaults_inav.cfg', '.'),
+    ('defaults_edge.cfg', '.'),
+    ('icon.png', '.'),
+    ('LICENSE', '.')
+]
 
 a = Analysis(
     ['main.py'],
@@ -41,6 +47,9 @@ exe = EXE(
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
+    entitlements_file=None,
+    icon='icon.ico',
+)
 
 coll = COLLECT(
     exe,
