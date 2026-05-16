@@ -131,10 +131,6 @@ class Viewer3D(QWidget):
             adjusted = ImageEnhance.Brightness(img).enhance(brightness)
             adjusted = ImageEnhance.Contrast(adjusted).enhance(contrast)
 
-            cache_key = hashlib.md5(f"{abs_path}_{os.path.getmtime(abs_path):.6f}_{brightness:.3f}_{contrast:.3f}".encode()).hexdigest()[:10]
-            out_path = os.path.join(os.path.dirname(abs_path), f"current_map_render_{cache_key}.jpg")
-            adjusted.save(out_path, quality=92)
-            return out_path
         except Exception:
             return abs_path
 
