@@ -18,6 +18,17 @@ import os
 import re
 import html
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+
 if __name__ == "__main__":
     # PyInstaller windowed mode fix: redirect stdout/stderr if they are None
     # This MUST happen before faulthandler.enable() or it will crash on some systems
@@ -45,7 +56,8 @@ if __name__ == "__main__":
 
     app = QApplication(sys.argv)
     
-    splash_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splash.png")
+    splash_path = resource_path("splash.png")
+
     pixmap = QPixmap(splash_path)
     if pixmap.isNull():
         # fallback if splash.png is missing
@@ -713,8 +725,8 @@ class MainWindow(QMainWindow):
         self.lbl_splash_rhs.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_splash_rhs.setStyleSheet("background-color: #0b0b0b; border-radius: 10px;")
         
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        splash_path = os.path.join(base_path, "splash.png")
+        splash_path = resource_path("splash.png")
+
         pix = QPixmap(splash_path)
         if not pix.isNull():
              grayscale_image = pix.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
@@ -783,12 +795,9 @@ class MainWindow(QMainWindow):
         import os
         import json
         
-        # Helper to get absolute path to config file in app directory
         def get_cfg_full_path(filename):
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            if getattr(sys, 'frozen', False):
-                base_path = os.path.dirname(sys.executable)
-            return os.path.join(base_path, filename)
+            return resource_path(filename)
+
 
         # Use separate config files for INAV vs ArduPilot
         cfg_name = "defaults_ardu.cfg" if getattr(self, 'log_type', 'inav') == 'ardupilot' else "defaults_inav.cfg"

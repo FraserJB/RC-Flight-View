@@ -32,7 +32,8 @@ map_cache/
 *.zip
 blackbox-tools/
 blackbox-tools.zip
-INAV_Flight_View.spec
+*.spec
+
 
 # Data files (Optional: ignore if you don't want to share your personal logs)
 Logfiles/
