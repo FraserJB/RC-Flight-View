@@ -488,6 +488,42 @@ for p in ARDUPILOT_PARAMS:
     if p["param"] in ARDUPILOT_DESC_OVERRIDES:
         p["desc"] = ARDUPILOT_DESC_OVERRIDES[p["param"]]
 
+
+EDGETX_PARAMS = [
+    # Core Attitude & Position
+    {"name": "Altitude (GPS)", "param": "GPS_altitude", "desc": "Altitude above sea level or takeoff point reported by GPS.", "unit": "m", "color": "#00ff00", "plot": True, "trail": True},
+    {"name": "Altitude (Baro)", "param": "BaroAlt (cm)", "desc": "Altitude measured by the barometer sensor.", "unit": "m", "color": "#00ff88", "plot": False, "trail": False},
+    {"name": "Roll Angle", "param": "attitude[0]", "desc": "Aircraft lean angle on the roll axis.", "unit": "deg", "color": "#ff00ff", "plot": True, "trail": True},
+    {"name": "Pitch Angle", "param": "attitude[1]", "desc": "Aircraft tilt angle on the pitch axis.", "unit": "deg", "color": "#00ffff", "plot": True, "trail": True},
+    {"name": "Yaw (Heading)", "param": "attitude[2]", "desc": "Aircraft heading relative to North.", "unit": "deg", "color": "#ffff00", "plot": True, "trail": False},
+    
+    # Power System
+    {"name": "Battery Voltage", "param": "vbat (V)", "desc": "Main flight battery voltage reported by telemetry.", "unit": "V", "color": "#ffff00", "plot": True, "trail": True},
+    {"name": "Current Draw", "param": "amperage (A)", "desc": "Real-time current draw from the battery.", "unit": "A", "color": "#ff3333", "plot": True, "trail": True},
+    {"name": "Capacity Used", "param": "energyCumulative (mAh)", "desc": "Total battery capacity consumed.", "unit": "mAh", "color": "#ff6666", "plot": False, "trail": False},
+    {"name": "Battery %", "param": "batteryRemaining", "desc": "Estimated battery percentage remaining.", "unit": "%", "color": "#aaff00", "plot": False, "trail": False},
+    
+    # GPS & Navigation
+    {"name": "GPS Satellites", "param": "GPS_numSat", "desc": "Number of satellites locked.", "unit": "", "color": "#ffffff", "plot": True, "trail": True},
+    {"name": "GPS Ground Speed", "param": "GPS_speed (m/s)", "desc": "Speed over ground measured by GPS.", "unit": "m/s", "color": "#00ffff", "plot": False, "trail": True},
+    {"name": "GPS Course", "param": "GPS_ground_course", "desc": "Actual direction of travel over ground.", "unit": "deg", "color": "#ffff00", "plot": False, "trail": False},
+    
+    # Radio & Telemetry
+    {"name": "RSSI", "param": "rssi", "desc": "Received Signal Strength Indicator at the receiver.", "unit": "dB", "color": "#ffffff", "plot": True, "trail": True},
+    {"name": "Link Quality", "param": "linkQuality", "desc": "Link quality percentage.", "unit": "%", "color": "#00ff00", "plot": False, "trail": False},
+    {"name": "TX RSSI", "param": "rssi_tx", "desc": "Telemetry Signal Strength at the transmitter.", "unit": "dB", "color": "#aaaaff", "plot": False, "trail": False},
+    {"name": "TX Battery", "param": "TxBat(V)", "desc": "Radio transmitter battery voltage.", "unit": "V", "color": "#888888", "plot": False},
+
+    # RC Inputs
+    {"name": "Roll Stick", "param": "rcData[0]", "desc": "Aileron stick position.", "unit": "us", "color": "#ff00ff", "plot": False},
+    {"name": "Pitch Stick", "param": "rcData[1]", "desc": "Elevator stick position.", "unit": "us", "color": "#00ffff", "plot": False},
+    {"name": "Yaw Stick", "param": "rcData[2]", "desc": "Rudder stick position.", "unit": "us", "color": "#ffff00", "plot": False},
+    {"name": "Throttle Stick", "param": "rcData[3]", "desc": "Throttle stick position.", "unit": "us", "color": "#ffffff", "plot": False},
+
+    # System Status
+    {"name": "Flight Mode", "param": "flightModeFlags (flags)", "desc": "Active flight mode (numeric index from EdgeTX).", "unit": "", "color": "#ffffff", "plot": False, "can_plot": False},
+]
+
 def enrich_params(params_list, mappings=ENCODED_PARAMS):
     for p in params_list:
         if p['param'] in mappings:
@@ -499,3 +535,4 @@ def enrich_params(params_list, mappings=ENCODED_PARAMS):
 
 enrich_params(INAV_PARAMS)
 enrich_params(ARDUPILOT_PARAMS, ARDUPILOT_ENCODED_PARAMS)
+enrich_params(EDGETX_PARAMS)

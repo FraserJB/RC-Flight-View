@@ -55,3 +55,4 @@ crash.log
 scratch/
 test.png
 test_*.jpg
+current_map_render_*.jpg

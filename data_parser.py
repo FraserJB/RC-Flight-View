@@ -112,7 +112,6 @@ class DataParser:
     def load_data(self):
         """Loads and processes the decoded CSV files."""
         if self.progress_callback: self.progress_callback("Loading main CSV data...", 40)
-        print("Loading CSV data...")
         self.df_main = pd.read_csv(self.main_csv).drop_duplicates(subset=['time (us)'])
         
         if os.path.exists(self.gps_csv):
@@ -235,8 +234,8 @@ class DataParser:
 
 def detect_log_type(file_path):
     """
-    Detect whether a log file is INAV Blackbox or ArduPilot DataFlash.
-    Returns 'inav' or 'ardupilot'.
+    Detect whether a log file is INAV Blackbox, ArduPilot DataFlash, or EdgeTX Telemetry.
+    Returns 'inav', 'ardupilot', or 'edgetx'.
     """
     ext = os.path.splitext(file_path)[1].lower()
 
@@ -248,9 +247,13 @@ def detect_log_type(file_path):
     if ext in ('.txt', '.bbl', '.csv', ''):
         try:
             with open(file_path, 'r', errors='ignore') as f:
-                header = f.read(512)
+                header = f.read(1024)
             if 'Blackbox flight data recorder' in header or 'H Product:' in header:
                 return 'inav'
+            
+            # EdgeTX logs start with Date,Time
+            if header.startswith('Date,Time'):
+                return 'edgetx'
         except Exception:
             pass
 
@@ -279,6 +282,10 @@ def detect_and_parse(file_path, decode_exe_path=None, progress_callback=None):
         from ardupilot_parser import ArdupilotParser
         parser = ArdupilotParser(file_path, progress_callback=progress_callback)
         return parser, 'ardupilot'
+    elif log_type == 'edgetx':
+        from edgetx_parser import EdgeTXParser
+        parser = EdgeTXParser(file_path, progress_callback=progress_callback)
+        return parser, 'edgetx'
     else:
         parser = DataParser(file_path, decode_exe_path=decode_exe_path,
                             progress_callback=progress_callback)

@@ -6,11 +6,12 @@ RC Flight View: Multi-Firmware Telemetry Visualization
   
   
   
-RC Flight View is a premium, high-performance telemetry visualization tool for **INAV** and **ArduPilot**. It transforms raw flight data into an interactive 3D environment, allowing for detailed forensic analysis of every maneuver.
+RC Flight View is a premium, high-performance telemetry visualization tool for **INAV**, **ArduPilot**, and **EdgeTX telemetry** logs. It transforms raw flight data into an interactive 3D environment, allowing for detailed forensic analysis of every maneuver.
 
 ### 🛰️ Supported Firmwares
 *   **INAV Blackbox**: Full support for `.txt` logs.
 *   **ArduPilot DataFlash**: Comprehensive analysis of `.bin` logs.
+*   **EdgeTX Telemetry**: Support for `.csv` telemetry log files.
 
 
 <img width="2003" height="1235" alt="image" src="https://github.com/user-attachments/assets/98892c5e-261d-4c35-b194-c030712cbdf5" />
@@ -21,7 +22,7 @@ RC Flight View is a premium, high-performance telemetry visualization tool for *
 
   
 Key Features:
-* Immersive 3D Reconstruction: Experience your flight path in a fully rotatable OpenGL-based viewer, complete with real-time attitude tracking and terrain-mapped navigation.
+* Immersive 3D Reconstruction: Experience your flight path in a fully rotatable OpenGL-based viewer, complete with real-time attitude tracking, map overlays, and 3D terrain rendering.
 * Intelligent Flag & State Viewer: Instantly decode complex status bitmasks. The dynamic grid highlights active flight modes, sensor health, and navigation states for both INAV and ArduPilot firmwares, filtering out noise to show only what matters for your specific flight.
 * Pilot Input Overlay: A transparent, frame-accurate Mode 2 transmitter stick overlay visualizes your actual control inputs directly over the 3D scene, making it easy to correlate pilot actions with aircraft response.
 * Streamlined Performance: A custom-optimized startup sequence with an integrated splash screen ensures you go from log selection to data analysis in seconds.

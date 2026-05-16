@@ -14,13 +14,18 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
+import hashlib
 import pyvista as pv
 from pyvistaqt import QtInteractor
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtCore import pyqtSignal, QEvent, Qt, QTimer
 import numpy as np
+from PIL import Image, ImageEnhance
 from mesh_utils import create_aircraft_mesh
 
 class Viewer3D(QWidget):
+    pathPointClicked = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
@@ -32,6 +37,7 @@ class Viewer3D(QWidget):
         
         self.path_actor = None
         self.map_actor = None
+        self.terrain_actor = None
         self.ghost_actor = None
         
         # FPV-specific actors for independent properties
@@ -63,6 +69,26 @@ class Viewer3D(QWidget):
         self.dist_unit = "m"
         self.height_unit = "m"
         self._refresh_grid()
+        self._click_press_pos = None
+        self._click_drag_threshold_px = 5
+        self.plotter.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self.plotter:
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self._click_press_pos = event.position()
+            elif event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                press_pos = self._click_press_pos
+                self._click_press_pos = None
+                if press_pos is not None:
+                    release_pos = event.position()
+                    delta = release_pos - press_pos
+                    if (delta.x() * delta.x() + delta.y() * delta.y()) <= (self._click_drag_threshold_px ** 2):
+                        x = float(release_pos.x())
+                        y = float(release_pos.y())
+                        QTimer.singleShot(0, lambda x=x, y=y: self._pick_path_at_screen_pos(x, y))
+
+        return super().eventFilter(obj, event)
 
     def update_grid_units(self, dist_unit, height_unit):
         self.dist_unit = dist_unit
@@ -75,6 +101,71 @@ class Viewer3D(QWidget):
                                ytitle=f"Crossrange ({self.dist_unit})", 
                                ztitle=f"Height ({self.height_unit})", 
                                font_size=10)
+
+    @staticmethod
+    def _clamp(value, min_value, max_value):
+        return max(min_value, min(max_value, value))
+
+    def _prepare_map_texture(self, texture_path):
+        """Normalize bright/dark map textures so scene lighting cannot wash them out."""
+        abs_path = os.path.abspath(texture_path)
+        try:
+            img = Image.open(abs_path).convert("RGB")
+            arr = np.asarray(img, dtype=np.float32) / 255.0
+            luminance = (arr[:, :, 0] * 0.2126) + (arr[:, :, 1] * 0.7152) + (arr[:, :, 2] * 0.0722)
+            mean = float(np.mean(luminance))
+            std = float(np.std(luminance))
+
+            # Bring very bright street/topo maps down and lift very dark imagery
+            # slightly, while preserving mid-tone satellite maps.
+            if mean > 0.68:
+                target_mean = 0.56
+            elif mean < 0.32:
+                target_mean = 0.40
+            else:
+                target_mean = mean
+
+            brightness = Viewer3D._clamp(target_mean / max(mean, 0.01), 0.55, 1.35)
+            contrast = Viewer3D._clamp(0.24 / max(std, 0.08), 1.0, 1.35)
+
+            adjusted = ImageEnhance.Brightness(img).enhance(brightness)
+            adjusted = ImageEnhance.Contrast(adjusted).enhance(contrast)
+
+            cache_key = hashlib.md5(f"{abs_path}_{os.path.getmtime(abs_path):.6f}_{brightness:.3f}_{contrast:.3f}".encode()).hexdigest()[:10]
+            out_path = os.path.join(os.path.dirname(abs_path), f"current_map_render_{cache_key}.jpg")
+            adjusted.save(out_path, quality=92)
+            return out_path
+        except Exception:
+            return abs_path
+
+    def clear_display_data(self):
+        """Remove log-specific 3D data while leaving the viewer controls intact."""
+        for attr in ("path_actor", "map_actor", "terrain_actor", "ghost_actor"):
+            actor = getattr(self, attr, None)
+            if actor is not None:
+                self.plotter.remove_actor(actor)
+                setattr(self, attr, None)
+
+        if self.fpv_renderer:
+            for attr in ("fpv_path_actor", "fpv_map_actor", "fpv_ghost_actor"):
+                actor = getattr(self, attr, None)
+                if actor is not None:
+                    self.fpv_renderer.RemoveActor(actor)
+                    setattr(self, attr, None)
+
+        self.full_path_points = None
+        self.ghost_points = []
+        self.breadcrumb_indices = []
+        self.breadcrumb_indices_array = np.array([], dtype=int)
+        self.current_idx = 0
+
+        if self.aircraft_actor is not None:
+            self.aircraft_actor.user_matrix = np.eye(4)
+
+        self._refresh_grid()
+        self.plotter.update()
+        if self.fpv_renderer:
+            self.fpv_renderer.Render()
 
     def set_path(self, points, reset_camera=True):
         """Sets the full flight path points (N, 3)."""
@@ -104,6 +195,7 @@ class Viewer3D(QWidget):
         
         self.path_actor = self.plotter.add_mesh(self.path_mesh, scalars="scalars", cmap="viridis", 
                                                 line_width=4, name="path", render_lines_as_tubes=True,
+                                                pickable=True,
                                                 scalar_bar_args={'title': 'Altitude', 'fmt': '%.1f', 
                                                                'bold': True, 'shadow': False,
                                                                'label_font_size': 10, 'title_font_size': 12})
@@ -126,6 +218,51 @@ class Viewer3D(QWidget):
             self.plotter.reset_camera()
             self.plotter.view_isometric()
 
+    def _pick_path_at_screen_pos(self, x, y):
+        """Seek to the nearest path point when the flight path is clicked."""
+        if self.full_path_points is None or self.path_actor is None:
+            return
+
+        try:
+            import vtk
+
+            renderer = self.plotter.iren.get_poked_renderer()
+            if renderer is None:
+                renderer = self.plotter.renderer
+
+            try:
+                scale = self.plotter._getPixelRatio()
+            except Exception:
+                scale = 1.0
+            pick_x = int(round(x * scale))
+            pick_y = int(round((self.plotter.height() - y - 1) * scale))
+
+            picker = vtk.vtkCellPicker()
+            picker.SetTolerance(0.025)
+            picker.PickFromListOn()
+            picker.AddPickList(self.path_actor)
+
+            if not picker.Pick(pick_x, pick_y, 0, renderer):
+                return
+
+            picked = np.array(picker.GetPickPosition(), dtype=float)
+            if not np.isfinite(picked).all():
+                return
+
+            points = np.asarray(self.full_path_points, dtype=float)
+            if points.ndim != 2 or len(points) == 0:
+                return
+
+            deltas = points - picked
+            dist_sq = np.einsum('ij,ij->i', deltas, deltas)
+            if not np.isfinite(dist_sq).any():
+                return
+
+            idx = int(np.nanargmin(dist_sq))
+            self.pathPointClicked.emit(idx)
+        except Exception:
+            return
+
     def update_path_scalars(self, scalars, label, unit=""):
         """Updates the coloring of the flight path based on new scalars."""
         if self.full_path_points is None:
@@ -143,6 +280,7 @@ class Viewer3D(QWidget):
         self.path_actor = self.plotter.add_mesh(self.path_mesh, scalars="scalars", cmap="viridis", 
                                                 line_width=4, name="path", render_lines_as_tubes=True,
                                                 reset_camera=False,
+                                                pickable=True,
                                                 scalar_bar_args={'title': title, 'fmt': fmt, 
                                                                'bold': True, 'shadow': False,
                                                                'label_font_size': 10, 'title_font_size': 12})
@@ -163,6 +301,10 @@ class Viewer3D(QWidget):
         """
         if self.map_actor:
             self.plotter.remove_actor(self.map_actor)
+            self.map_actor = None
+        if self.terrain_actor:
+            self.plotter.remove_actor(self.terrain_actor)
+            self.terrain_actor = None
             
         min_x, max_x, min_y, max_y = bounds_xy
         
@@ -179,10 +321,11 @@ class Viewer3D(QWidget):
         plane.texture_map_to_plane(inplace=True)
         
         try:
-            texture = pv.read_texture(os.path.abspath(texture_path))
-            # Use ambient=1.0 to ensure the texture is fully visible regardless of scene lighting
+            texture = pv.read_texture(self._prepare_map_texture(texture_path))
+            # Render map textures unlit.  The image is normalized above, so OSM
+            # stays readable and satellite imagery does not get crushed.
             self.map_actor = self.plotter.add_mesh(plane, texture=texture, name="map", 
-                                                   lighting=True, ambient=1.0, diffuse=0.0, 
+                                                   lighting=False,
                                                    show_edges=False, opacity=self.map_opacity)
             self.map_actor.SetVisibility(self.map_visible)
             
@@ -222,18 +365,80 @@ class Viewer3D(QWidget):
         """
         if self.map_actor:
             self.plotter.remove_actor(self.map_actor)
+            self.map_actor = None
+        if self.terrain_actor:
+            self.plotter.remove_actor(self.terrain_actor)
+            self.terrain_actor = None
             
-        # Create a StructuredGrid for the terrain
-        # Note: elevations is (res, res). x_grid, y_grid are (res, res)
-        grid = pv.StructuredGrid(x_grid, y_grid, elevations)
-        
-        # Texture mapping
-        grid.texture_map_to_plane(inplace=True)
+        elevations = np.asarray(elevations, dtype=float)
+        x_grid = np.asarray(x_grid, dtype=float)
+        y_grid = np.asarray(y_grid, dtype=float)
+        if elevations.shape != x_grid.shape or elevations.shape != y_grid.shape:
+            raise ValueError("Terrain elevation and coordinate grids must have matching shapes.")
+
+        rows, cols = elevations.shape
+        if rows < 2 or cols < 2:
+            raise ValueError("Terrain grid must be at least 2x2.")
+
+        # Build an explicit textured surface.  StructuredGrid texture mapping can
+        # drift on non-planar terrain, so fixed UVs keep the map image locked to
+        # the terrain corners.
+        points = np.column_stack((
+            x_grid.ravel(order='F'),
+            y_grid.ravel(order='F'),
+            elevations.ravel(order='F')
+        ))
+
+        faces = []
+        for ix in range(cols - 1):
+            for iy in range(rows - 1):
+                p0 = ix * rows + iy
+                p1 = (ix + 1) * rows + iy
+                p2 = (ix + 1) * rows + (iy + 1)
+                p3 = ix * rows + (iy + 1)
+                faces.extend([4, p0, p1, p2, p3])
+
+        terrain = pv.PolyData(points, np.array(faces))
+        u = np.repeat(np.linspace(0.0, 1.0, cols), rows)
+        v = np.tile(np.linspace(0.0, 1.0, rows), cols)
+        terrain.active_texture_coordinates = np.column_stack((u, v))
+        terrain = terrain.compute_normals(auto_orient_normals=True, inplace=False)
         
         try:
-            texture = pv.read_texture(os.path.abspath(texture_path))
-            self.map_actor = self.plotter.add_mesh(grid, texture=texture, name="map", lighting=False, 
+            # The textured map and bare terrain are separate actors.  This lets
+            # "Show Map" hide the texture while leaving the terrain mesh visible.
+            self.terrain_actor = self.plotter.add_mesh(
+                terrain,
+                color="#3a3a3a",
+                name="terrain_mesh",
+                lighting=True,
+                ambient=0.35,
+                diffuse=0.65,
+                show_edges=True,
+                edge_color="#5a5a5a",
+                opacity=1.0
+            )
+            self.terrain_actor.SetVisibility(not self.map_visible)
+
+            texture = pv.read_texture(self._prepare_map_texture(texture_path))
+            # Keep texture colors stable; terrain shape remains visible through
+            # geometry, path depth, and the separate mesh actor when the map is off.
+            self.map_actor = self.plotter.add_mesh(terrain, texture=texture, name="map", 
+                                                   lighting=False,
                                                    show_edges=False, opacity=self.map_opacity)
+            self.map_actor.SetVisibility(self.map_visible)
+            
+            # Add a directional light from the side to create shadows on small hills
+            # Check if we already have a scene light to avoid duplicates
+            has_scene_light = any(
+                hasattr(l, 'light_type') and str(l.light_type).lower() == 'scene light'
+                for l in self.plotter.renderer.lights
+            )
+            if not has_scene_light:
+                self.plotter.add_light(pv.Light(position=(0.5, 0.5, 1.0), 
+                                                focal_point=(0, 0, 0), 
+                                                intensity=1.0, 
+                                                light_type='scene light'))
             if self.fpv_renderer:
                 if self.fpv_map_actor:
                     self.fpv_renderer.RemoveActor(self.fpv_map_actor)
@@ -524,6 +729,13 @@ class Viewer3D(QWidget):
         if self.map_actor is not None:
             self.map_actor.SetVisibility(visible)
             self.plotter.update()
+        if self.terrain_actor is not None:
+            self.terrain_actor.SetVisibility(not visible)
+            self.plotter.update()
+        if self.fpv_map_actor is not None:
+            self.fpv_map_actor.SetVisibility(visible)
+            if self.fpv_renderer:
+                self.fpv_renderer.Render()
 
     def set_map_opacity(self, opacity):
         """Sets the opacity of the satellite map (0.0 to 1.0)."""

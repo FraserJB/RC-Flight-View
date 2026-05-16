@@ -269,6 +269,7 @@ class PlotWidget(QWidget):
         return (
             col.startswith('motor[')
             or col.startswith('servo[')
+            or col.startswith('rcData[')
             or col.startswith('rcou_C')
         )
 

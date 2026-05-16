@@ -71,6 +71,19 @@ if __name__ == "__main__":
     # Force a global font and size to prevent "Point size <= 0 (-1)" warnings
     app.setStyleSheet("QWidget { font-family: 'Segoe UI'; font-size: 8.5pt; }")
 
+    # Set application icon
+    from PyQt6.QtGui import QIcon
+    app_icon = QIcon(resource_path("icon.png"))
+    app.setWindowIcon(app_icon)
+    
+    # Taskbar icon fix for Windows
+    if os.name == 'nt':
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FraserJB.RCFlightView.v1")
+        except:
+            pass
+
 # Now perform heavy imports after the splash screen is visible
 import json
 import pandas as pd
@@ -80,7 +93,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QApplication,
                              QHBoxLayout, QPushButton, QSlider, QLabel, QFileDialog, QSplitter, QComboBox, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QDialog, QProgressDialog, QLineEdit)
 from PyQt6.QtWidgets import QTextBrowser
 from PyQt6.QtCore import QTimer, QRect, QPoint, QElapsedTimer, QThread, pyqtSignal, QEvent, QUrl, Qt
-from PyQt6.QtGui import QPalette, QColor, QPainter, QPen, QFont, QDesktopServices, QImage, QPixmap
+from PyQt6.QtGui import QPalette, QColor, QPainter, QPen, QFont, QDesktopServices, QImage, QPixmap, QIcon
 
 from data_parser import DataParser, BlackboxDecodeMissingError, detect_and_parse
 from viewer_3d import Viewer3D
@@ -93,7 +106,7 @@ from custom_url_dialog import CustomUrlDialog
 from units_dialog import UnitsDialog
 from unit_utils import apply_units_to_df, DEFAULT_UNITS
 
-from parameters_config import INAV_PARAMS, ARDUPILOT_PARAMS, ENCODED_PARAMS, ARDUPILOT_ENCODED_PARAMS
+from parameters_config import INAV_PARAMS, ARDUPILOT_PARAMS, EDGETX_PARAMS, ENCODED_PARAMS, ARDUPILOT_ENCODED_PARAMS
 
 import matplotlib
 matplotlib.rcParams['font.size'] = 8
@@ -166,22 +179,37 @@ def get_viewer_params_dict(config):
 
 
 class MapWorker(QThread):
-    finished = pyqtSignal(str, tuple) # map_path, map_bounds
+    finished = pyqtSignal(str, tuple, object) # map_path, map_bounds, elevations
     progress = pyqtSignal(int, int)    # current, total
+    status = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, map_provider, bounds):
+    def __init__(self, map_provider, bounds, fetch_elevation=False):
         super().__init__()
         self.map_provider = map_provider
         self.bounds = bounds # (min_lat, max_lat, min_lon, max_lon)
+        self.fetch_elevation = fetch_elevation
 
     def run(self):
         try:
             def callback(curr, total):
                 self.progress.emit(curr, total)
+
+            def terrain_callback(curr, total):
+                self.progress.emit(curr, total)
                 
+            self.status.emit("Downloading Map...")
             map_path, map_bounds = self.map_provider.get_map(*self.bounds, progress_callback=callback)
-            self.finished.emit(map_path, map_bounds)
+            
+            elevations = None
+            if self.fetch_elevation:
+                self.status.emit("Downloading Terrain...")
+                # Fetch elevation for the ACTUAL bounds of the map we just stitched
+                elevations = self.map_provider.get_elevation_grid(*map_bounds, progress_callback=terrain_callback)
+                if elevations is None:
+                    self.status.emit("Terrain Data Unavailable")
+                
+            self.finished.emit(map_path, map_bounds, elevations)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -190,6 +218,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("RC Flight View")
         self.resize(1600, 900)
+        self.setWindowIcon(QIcon(resource_path("icon.png")))
         
         # Set a default font to avoid QFont::setPointSize: Point size <= 0 (-1) warnings
         self.setFont(QFont("Segoe UI", 10))
@@ -215,6 +244,7 @@ class MainWindow(QMainWindow):
         
         # Load persistent settings
         self.load_config()
+        self.update_flags_button_state()
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.next_frame)
@@ -226,6 +256,16 @@ class MainWindow(QMainWindow):
     def load_log_file(self, file_path):
         import os
         if os.path.exists(file_path):
+            self.timer.stop()
+            self.is_playing = False
+            if self.map_worker and self.map_worker.isRunning():
+                self.map_worker.terminate()
+                self.map_worker.wait()
+            if hasattr(self, 'viewer_3d'):
+                self.viewer_3d.clear_display_data()
+            self.lbl_map_progress.setVisible(False)
+            QApplication.processEvents()
+
             progress = QProgressDialog("Loading Log File...", "Cancel", 0, 100, self)
             progress.setWindowTitle("Please Wait")
             progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -247,13 +287,16 @@ class MainWindow(QMainWindow):
                     progress_callback=update_progress
                 )
                 
-                # Reload config for the detected log type (ArduPilot vs INAV)
+                # Reload config for the detected log type (ArduPilot vs INAV vs EdgeTX)
                 # to apply firmware-specific units/inversions/etc.
                 if self.log_type == 'ardupilot':
                     self.param_config = [dict(p) for p in ARDUPILOT_PARAMS]
+                elif self.log_type == 'edgetx':
+                    self.param_config = [dict(p) for p in EDGETX_PARAMS]
                 else:
                     self.param_config = [dict(p) for p in INAV_PARAMS]
                 self.load_config()
+                self.update_flags_button_state()
                 
                 self.raw_df = self.data_parser.get_data()
                 self.apply_units()
@@ -331,8 +374,8 @@ class MainWindow(QMainWindow):
                 self.lbl_summary.setText(f"Type: {ac_type} | Motors: {active_motors} | Servos: {active_servos} | GPS: {has_gps}")
                 self.btn_aircraft_info.setEnabled(True)
                 
-                # Hide Nav label for ArduPilot as it's redundant (Mode covers it)
-                if self.log_type == 'ardupilot':
+                # Hide Nav label for ArduPilot/EdgeTX as it's redundant or unavailable
+                if self.log_type in ['ardupilot', 'edgetx']:
                     self.lbl_nav.hide()
                 else:
                     self.lbl_nav.show()
@@ -584,6 +627,7 @@ class MainWindow(QMainWindow):
         viewer_grid.setContentsMargins(0,0,0,0)
         
         self.viewer_3d = Viewer3D()
+        self.viewer_3d.pathPointClicked.connect(self._on_path_point_clicked)
         viewer_grid.addWidget(self.viewer_3d, 0, 0)
         
         # Use a floating Tool Window parented to the main window to guarantee perfect OS-level compositing over OpenGL
@@ -619,6 +663,33 @@ class MainWindow(QMainWindow):
         self.chk_map.setStyleSheet("color: #888888; font-size: 7.5pt;")
         self.chk_map.stateChanged.connect(self.toggle_map)
         viewer_controls.addWidget(self.chk_map)
+
+        self.combo_map_provider = QComboBox()
+        self.combo_map_provider.addItems(["Satellite (ESRI)", "Street (OSM)", "MapProxy / Custom"])
+        self.combo_map_provider.setFixedWidth(130)
+        self.combo_map_provider.setStyleSheet("QComboBox { background: #333; color: white; border: 1px solid #555; border-radius: 4pt; padding: 2pt 5pt; }")
+        self.combo_map_provider.currentTextChanged.connect(self.on_map_provider_changed)
+        viewer_controls.addWidget(self.combo_map_provider)
+
+        self.btn_set_url = QPushButton("Set URL")
+        self.btn_set_url.setFixedWidth(80)
+        self.btn_set_url.setStyleSheet("color: #00aaff; font-weight: bold; background-color: #222; border: 1px solid #444;")
+        self.btn_set_url.setVisible(False)
+        self.btn_set_url.clicked.connect(self.open_custom_url_dialog)
+        viewer_controls.addWidget(self.btn_set_url)
+        
+        self.chk_3d_terrain = QCheckBox("3D Terrain")
+        self.chk_3d_terrain.setChecked(False)
+        self.chk_3d_terrain.setStyleSheet("color: #888888; font-size: 7.5pt;")
+        self.chk_3d_terrain.stateChanged.connect(self.toggle_3d_terrain)
+        viewer_controls.addWidget(self.chk_3d_terrain)
+
+        self.combo_terrain_provider = QComboBox()
+        self.combo_terrain_provider.addItems(self.map_provider.get_terrain_provider_names())
+        self.combo_terrain_provider.setFixedWidth(185)
+        self.combo_terrain_provider.setStyleSheet("QComboBox { background: #333; color: white; border: 1px solid #555; border-radius: 4pt; padding: 2pt 5pt; }")
+        self.combo_terrain_provider.currentTextChanged.connect(self.on_terrain_provider_changed)
+        viewer_controls.addWidget(self.combo_terrain_provider)
         
 
         
@@ -637,21 +708,6 @@ class MainWindow(QMainWindow):
         """)
         self.slider_map_opacity.valueChanged.connect(self.on_map_opacity_changed)
         viewer_controls.addWidget(self.slider_map_opacity)
-        
-        viewer_controls.addSpacing(10)
-        self.combo_map_provider = QComboBox()
-        self.combo_map_provider.addItems(["Satellite (ESRI)", "Street (OSM)", "MapProxy / Custom"])
-        self.combo_map_provider.setFixedWidth(130)
-        self.combo_map_provider.setStyleSheet("QComboBox { background: #333; color: white; border: 1px solid #555; border-radius: 4pt; padding: 2pt 5pt; }")
-        self.combo_map_provider.currentTextChanged.connect(self.on_map_provider_changed)
-        viewer_controls.addWidget(self.combo_map_provider)
-
-        self.btn_set_url = QPushButton("Set URL")
-        self.btn_set_url.setFixedWidth(100)
-        self.btn_set_url.setStyleSheet("color: #00aaff; font-weight: bold; background-color: #222; border: 1px solid #444;")
-        self.btn_set_url.setVisible(False)
-        self.btn_set_url.clicked.connect(self.open_custom_url_dialog)
-        viewer_controls.addWidget(self.btn_set_url)
         
         viewer_controls.addStretch()
         
@@ -799,8 +855,12 @@ class MainWindow(QMainWindow):
             return resource_path(filename)
 
 
-        # Use separate config files for INAV vs ArduPilot
-        cfg_name = "defaults_ardu.cfg" if getattr(self, 'log_type', 'inav') == 'ardupilot' else "defaults_inav.cfg"
+        # Use separate config files for INAV vs ArduPilot vs EdgeTX
+        lt = getattr(self, 'log_type', 'inav')
+        if lt == 'ardupilot': cfg_name = "defaults_ardu.cfg"
+        elif lt == 'edgetx': cfg_name = "defaults_edge.cfg"
+        else: cfg_name = "defaults_inav.cfg"
+        
         config_path = get_cfg_full_path(cfg_name)
         
 
@@ -845,11 +905,15 @@ class MainWindow(QMainWindow):
             # Map Controls
             if "show_map" in config:
                 self.chk_map.setChecked(config["show_map"])
+            if "terrain_3d" in config:
+                self.chk_3d_terrain.setChecked(config["terrain_3d"])
 
             if "map_opacity" in config:
                 self.slider_map_opacity.setValue(config["map_opacity"])
             if "map_provider" in config:
                 self.combo_map_provider.setCurrentText(config["map_provider"])
+            if "terrain_provider" in config:
+                self.combo_terrain_provider.setCurrentText(config["terrain_provider"])
             if "custom_map_urls" in config:
                 self.custom_map_urls = config["custom_map_urls"]
             else:
@@ -950,11 +1014,13 @@ class MainWindow(QMainWindow):
             "invert_pitch": self.chk_inv_pitch.isChecked(),
             "invert_yaw": self.chk_inv_yaw.isChecked(),
             "show_map": self.chk_map.isChecked(),
+            "terrain_3d": self.chk_3d_terrain.isChecked(),
             "extra_area": True,
             "show_fpv": self.chk_fpv.isChecked(),
             "show_sticks": self.chk_sticks.isChecked(),
             "map_opacity": self.slider_map_opacity.value(),
             "map_provider": self.combo_map_provider.currentText(),
+            "terrain_provider": self.combo_terrain_provider.currentText(),
             "mapproxy_url": getattr(self, 'current_mapproxy_url', ''),
             "custom_map_urls": getattr(self, 'custom_map_urls', []),
             "trail_param": self.combo_path_param.currentText(),
@@ -972,39 +1038,42 @@ class MainWindow(QMainWindow):
                     base_path = os.path.dirname(sys.executable)
                 return os.path.join(base_path, filename)
 
-            is_ardu = getattr(self, 'log_type', 'inav') == 'ardupilot'
-            cfg_name = "defaults_ardu.cfg" if is_ardu else "defaults_inav.cfg"
-            config_path = get_cfg_full_path(cfg_name)
+            lt = getattr(self, 'log_type', 'inav')
+            if lt == 'ardupilot': cfg_name = "defaults_ardu.cfg"
+            elif lt == 'edgetx': cfg_name = "defaults_edge.cfg"
+            else: cfg_name = "defaults_inav.cfg"
             
-
+            config_path = get_cfg_full_path(cfg_name)
             
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=4)
                 
-            # Always synchronize "Global" settings to the OTHER config file as well
-            other_cfg_name = "defaults_inav.cfg" if is_ardu else "defaults_ardu.cfg"
-            other_cfg_path = get_cfg_full_path(other_cfg_name)
-            
-            # If the other file exists, update it. If not, we don't necessarily need to create it yet.
-            if os.path.exists(other_cfg_path):
-                try:
-                    other_data = {}
-                    with open(other_cfg_path, "r") as f:
-                        other_data = json.load(f)
-                    
-                    # Update global fields
-                    globals_updated = False
-                    for field in ["last_log_dir", "blackbox_decode_path", "map_provider", "mapproxy_url", "custom_map_urls"]:
-                        new_val = config.get(field)
-                        if new_val is not None:
-                            other_data[field] = new_val
-                            globals_updated = True
-                    
-                    if globals_updated:
-                        with open(other_cfg_path, "w") as f:
-                            json.dump(other_data, f, indent=4)
-                except Exception as e:
-                    print(f"Error syncing global settings to {other_cfg_name}: {e}")
+            # Always synchronize "Global" settings to the OTHER config files as well
+            other_configs = ["defaults_inav.cfg", "defaults_ardu.cfg", "defaults_edge.cfg"]
+            if cfg_name in other_configs:
+                other_configs.remove(cfg_name)
+                
+            for other_cfg_name in other_configs:
+                other_cfg_path = get_cfg_full_path(other_cfg_name)
+                if os.path.exists(other_cfg_path):
+                    try:
+                        other_data = {}
+                        with open(other_cfg_path, "r") as f:
+                            other_data = json.load(f)
+                        
+                        # Update global fields
+                        globals_updated = False
+                        for field in ["last_log_dir", "blackbox_decode_path", "map_provider", "terrain_provider", "mapproxy_url", "custom_map_urls"]:
+                            new_val = config.get(field)
+                            if new_val is not None:
+                                other_data[field] = new_val
+                                globals_updated = True
+                        
+                        if globals_updated:
+                            with open(other_cfg_path, "w") as f:
+                                json.dump(other_data, f, indent=4)
+                    except Exception as e:
+                        print(f"Error syncing global settings to {other_cfg_name}: {e}")
                     
         except Exception as e:
             print(f"Error saving config: {e}")
@@ -1200,6 +1269,19 @@ class MainWindow(QMainWindow):
                 armed_s = armed_us / 1e6
                 am, as_ = divmod(armed_s, 60)
                 stats.append(f"Armed: {int(am)}m{int(as_)}s")
+        
+        # --- Update Rate (EdgeTX only) ---
+        if self.log_type == 'edgetx' and len(raw) > 1:
+            time_us = pd.to_numeric(raw['time (us)'], errors='coerce')
+            dt_us = time_us.diff().dropna()
+            dt_us = dt_us[dt_us > 0]
+            if len(dt_us) > 10:
+                dt_us = dt_us.iloc[min(5, len(dt_us) // 10):]
+            if not dt_us.empty:
+                typical_dt_us = dt_us.median()
+                if typical_dt_us > 0:
+                    update_interval_s = typical_dt_us / 1e6
+                    stats.append(f"Update Interval: {update_interval_s:.2f}s")
         
         # Build the display string
         separator = "   \u2502   "  # │ character with spacing
@@ -1635,7 +1717,7 @@ class MainWindow(QMainWindow):
 
     def open_file(self):
         start_dir = getattr(self, 'last_log_dir', '') or ''
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Flight Log", start_dir, "Flight Logs (*.TXT *.BBL *.BIN);;INAV Blackbox (*.TXT *.BBL);;ArduPilot DataFlash (*.BIN);;All Files (*)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Flight Log", start_dir, "Flight Logs (*.TXT *.BBL *.BIN *.CSV);;INAV Blackbox (*.TXT *.BBL);;ArduPilot DataFlash (*.BIN);;EdgeTX Telemetry (*.CSV);;All Files (*)")
         if file_path:
             self.last_log_dir = os.path.dirname(file_path)
             self.save_config()
@@ -1724,6 +1806,20 @@ class MainWindow(QMainWindow):
         except:
             pass
 
+    def update_flags_button_state(self):
+        """Enable the flag viewer only for log types that expose decoded flags."""
+        if not hasattr(self, 'btn_flags'):
+            return
+
+        flags_available = getattr(self, 'log_type', 'inav') != 'edgetx'
+        self.btn_flags.setEnabled(flags_available)
+        if flags_available:
+            self.btn_flags.setToolTip("Open Flag and State Viewer")
+        else:
+            self.btn_flags.setToolTip("EdgeTX telemetry logs do not include decoded flag parameters.")
+            if getattr(self, 'flag_viewer', None) is not None and self.flag_viewer.isVisible():
+                self.flag_viewer.close()
+
     def open_param_selector(self):
         # Prepare lookup for descriptions etc
         base_params = ARDUPILOT_PARAMS if self.log_type == 'ardupilot' else INAV_PARAMS
@@ -1782,6 +1878,9 @@ class MainWindow(QMainWindow):
 
     def open_flag_viewer(self):
         """Open (or re-show) the Flag and State Viewer."""
+        if getattr(self, 'log_type', 'inav') == 'edgetx':
+            return
+
         if self.flag_viewer is None or not self.flag_viewer.isVisible():
             # Pass None as parent to allow the window to drop behind the main app
             self.flag_viewer = FlagViewer(None, 
@@ -1822,7 +1921,23 @@ class MainWindow(QMainWindow):
         
         # Find nearest row index
         idx = (self.df['time (us)'] - target_us).abs().idxmin()
-        self.slider.setValue(int(idx))
+        self.seek_to_index(int(idx))
+
+    def _on_path_point_clicked(self, idx):
+        """Seek when the user clicks a point on the 3D flight path."""
+        self.seek_to_index(idx)
+
+    def seek_to_index(self, idx):
+        """Move playback and all time-linked views to a dataframe row."""
+        if self.df is None or len(self.df) == 0:
+            return
+
+        idx = max(0, min(int(idx), len(self.df) - 1))
+        self.playback_idx = float(idx)
+        if self.slider.value() != idx:
+            self.slider.setValue(idx)
+        else:
+            self.slider_changed(idx)
 
     def toggle_map(self, state):
         visible = (state == Qt.CheckState.Checked.value)
@@ -1838,6 +1953,10 @@ class MainWindow(QMainWindow):
         visible = (state == Qt.CheckState.Checked.value)
         if hasattr(self, 'rc_overlay'):
             self.rc_overlay.setVisible(visible)
+        self.save_config()
+
+    def toggle_3d_terrain(self, state):
+        self.trigger_map_update()
         self.save_config()
 
     def update_overlay_pos(self):
@@ -1869,6 +1988,7 @@ class MainWindow(QMainWindow):
         # Update map provider settings before fetching
         current_custom_url = getattr(self, 'current_mapproxy_url', '')
         self.map_provider.set_provider(self.combo_map_provider.currentText(), current_custom_url)
+        self.map_provider.set_terrain_provider(self.combo_terrain_provider.currentText())
 
         # Cancel existing worker if any
         if self.map_worker and self.map_worker.isRunning():
@@ -1879,15 +1999,22 @@ class MainWindow(QMainWindow):
         self.lbl_map_progress.setText("Downloading Map...")
         self.lbl_map_progress.setVisible(True)
             
-        self.map_worker = MapWorker(self.map_provider, (min_lat, max_lat, min_lon, max_lon))
+        fetch_elevation = self.chk_3d_terrain.isChecked()
+        self.map_worker = MapWorker(self.map_provider, (min_lat, max_lat, min_lon, max_lon), fetch_elevation=fetch_elevation)
         self.map_worker.finished.connect(self.on_map_ready)
         self.map_worker.progress.connect(self.on_map_progress)
+        self.map_worker.status.connect(self.on_map_status)
         self.map_worker.error.connect(self.on_map_error)
         self.map_worker.start()
 
+    def on_map_status(self, msg):
+        self._map_status_msg = msg
+        self.lbl_map_progress.setText(msg)
+
     def on_map_progress(self, curr, total):
         pct = int((curr / total) * 100)
-        self.lbl_map_progress.setText(f"Map Download {pct}% ({curr}/{total})")
+        prefix = getattr(self, '_map_status_msg', "Map Download")
+        self.lbl_map_progress.setText(f"{prefix} {pct}% ({curr}/{total})")
 
     def on_map_error(self, err):
         print(f"Map Worker Error: {err}")
@@ -1898,7 +2025,7 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_map_progress.setVisible(False)
 
-    def on_map_ready(self, map_path, map_bounds):
+    def on_map_ready(self, map_path, map_bounds, elevations):
         self.lbl_map_progress.setVisible(False)
         if not hasattr(self, 'data_parser'):
             return
@@ -1911,13 +2038,14 @@ class MainWindow(QMainWindow):
             # Store the meter-based bounds and texture path for re-scaling on unit change
             self._map_bounds_m = (x_min, x_max, y_min, y_max)
             self._map_texture_path = map_path
+            self._map_elevations = elevations
             
             # Apply unit conversion for distance if needed
-            self._apply_map_with_units(map_path, x_min, x_max, y_min, y_max)
+            self._apply_map_with_units(map_path, x_min, x_max, y_min, y_max, elevations)
         except Exception as e:
             print(f"Failed to apply map: {e}")
 
-    def _apply_map_with_units(self, map_path, x_min, x_max, y_min, y_max):
+    def _apply_map_with_units(self, map_path, x_min, x_max, y_min, y_max, elevations=None):
         """Apply unit conversion to meter-based bounds and update the 3D map."""
         dist_unit = self.unit_prefs.get('Distance', 'm')
         if dist_unit != 'm':
@@ -1926,14 +2054,56 @@ class MainWindow(QMainWindow):
             x_max, _ = convert_value(x_max, 'Distance', 'm', dist_unit)
             y_min, _ = convert_value(y_min, 'Distance', 'm', dist_unit)
             y_max, _ = convert_value(y_max, 'Distance', 'm', dist_unit)
-        self.viewer_3d.set_map(map_path, (x_min, x_max, y_min, y_max))
+
+        if elevations is not None:
+            elevations = np.asarray(elevations, dtype=float)
+            if elevations.ndim != 2 or min(elevations.shape) < 2:
+                self.viewer_3d.set_map(map_path, (x_min, x_max, y_min, y_max))
+                return
+
+            rows, cols = elevations.shape
+            xs = np.linspace(x_min, x_max, cols)
+            ys = np.linspace(y_min, y_max, rows)
+            
+            # Elevation grids are returned top-to-bottom (max lat to min lat)
+            # Local coordinates Y increases from bottom-to-top (min lat to max lat)
+            # We flip UD so the first row of heights corresponds to min Y.
+            elevations_fixed = np.flipud(elevations).astype(float)
+            elevations_fixed[~np.isfinite(elevations_fixed)] = np.nan
+            if np.isnan(elevations_fixed).all():
+                self.viewer_3d.set_map(map_path, (x_min, x_max, y_min, y_max))
+                return
+            if np.isnan(elevations_fixed).any():
+                fill_height = np.nanmedian(elevations_fixed)
+                elevations_fixed = np.nan_to_num(elevations_fixed, nan=fill_height)
+            
+            # Subtract home elevation to make terrain relative to takeoff (0,0)
+            # We find the indices in xs and ys closest to 0.
+            ix = np.argmin(np.abs(xs - 0))
+            iy = np.argmin(np.abs(ys - 0))
+            home_elevation = elevations_fixed[iy, ix]
+            
+            # Apply home offset and a tiny safety margin to avoid z-fighting at takeoff
+            elevations_fixed = elevations_fixed - home_elevation - 0.1
+            
+            height_unit = self.unit_prefs.get('Height', 'm')
+            if height_unit != 'm':
+                from unit_utils import convert_value
+                m_to_pref = convert_value(1.0, 'Height', 'm', height_unit)[0]
+                elevations_fixed *= m_to_pref
+            
+            X, Y = np.meshgrid(xs, ys)
+            self.viewer_3d.set_terrain(map_path, elevations_fixed, X, Y)
+        else:
+            self.viewer_3d.set_map(map_path, (x_min, x_max, y_min, y_max))
 
     def _rescale_map(self):
         """Re-scale the existing map texture to match current units without re-downloading."""
         if hasattr(self, '_map_bounds_m') and hasattr(self, '_map_texture_path'):
             x_min, x_max, y_min, y_max = self._map_bounds_m
+            elevations = getattr(self, '_map_elevations', None)
             try:
-                self._apply_map_with_units(self._map_texture_path, x_min, x_max, y_min, y_max)
+                self._apply_map_with_units(self._map_texture_path, x_min, x_max, y_min, y_max, elevations)
             except Exception as e:
                 print(f"Failed to rescale map: {e}")
 
@@ -1945,6 +2115,12 @@ class MainWindow(QMainWindow):
     def on_map_provider_changed(self, provider):
         self.btn_set_url.setVisible(provider == "MapProxy / Custom")
         self.trigger_map_update()
+        self.save_config()
+
+    def on_terrain_provider_changed(self, provider):
+        self.map_provider.set_terrain_provider(provider)
+        if self.chk_3d_terrain.isChecked():
+            self.trigger_map_update()
         self.save_config()
 
     def open_custom_url_dialog(self):
