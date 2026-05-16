@@ -1,25 +1,29 @@
   
   
 RC Flight View: Multi-Firmware Telemetry Visualization
+
+<img width="974" height="920" alt="image" src="https://github.com/user-attachments/assets/7fd023e4-efdf-4c4a-a822-bf4a6c60b90f" />
   
-<img width="865" height="697" alt="image" src="https://github.com/user-attachments/assets/537b5205-eb6f-435b-bb25-ca947cb32d8f" />
   
   
 RC Flight View is a premium, high-performance telemetry visualization tool for **INAV** and **ArduPilot**. It transforms raw flight data into an interactive 3D environment, allowing for detailed forensic analysis of every maneuver.
 
 ### 🛰️ Supported Firmwares
-*   **INAV Blackbox**: Full support for `.txt` and `.bbl` logs.
+*   **INAV Blackbox**: Full support for `.txt` logs.
 *   **ArduPilot DataFlash**: Comprehensive analysis of `.bin` logs.
 
+
+<img width="2003" height="1235" alt="image" src="https://github.com/user-attachments/assets/98892c5e-261d-4c35-b194-c030712cbdf5" />
+
   
-<img width="1869" height="1081" alt="image" src="https://github.com/user-attachments/assets/c082da2f-6e13-42af-95f9-a96cc8b47133" />
+<img width="1406" height="872" alt="image" src="https://github.com/user-attachments/assets/a01dbd2e-3154-4492-bc53-1159c12a8f12" />
 
 
   
 Key Features:
 * Immersive 3D Reconstruction: Experience your flight path in a fully rotatable OpenGL-based viewer, complete with real-time attitude tracking and terrain-mapped navigation.
 * Intelligent Flag & State Viewer: Instantly decode complex status bitmasks. The dynamic grid highlights active flight modes, sensor health, and navigation states for both INAV and ArduPilot firmwares, filtering out noise to show only what matters for your specific flight.
-* Real-Time Pilot Input Overlay: A transparent, frame-accurate Mode 2 transmitter stick overlay visualizes your actual control inputs directly over the 3D scene, making it easy to correlate pilot actions with aircraft response.
+* Pilot Input Overlay: A transparent, frame-accurate Mode 2 transmitter stick overlay visualizes your actual control inputs directly over the 3D scene, making it easy to correlate pilot actions with aircraft response.
 * Streamlined Performance: A custom-optimized startup sequence with an integrated splash screen ensures you go from log selection to data analysis in seconds.
 * Zero-Install Portability: Designed for field use, the pre-compiled portable version runs instantly on any Windows machine with no Python dependencies required.
 
