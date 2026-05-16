@@ -45,8 +45,11 @@ Whether you are tuning PIDs, diagnosing erratic behavior, or simply showcasing y
 
 ---
 
-### 🗺 Map Providers
-ESRI and other map sources are free for non-commercial use. For commercial use, please check the provider's Terms and Conditions.
+### 🗺 Map & Terrain Providers
+Data provided by these services is used for non-commercial, forensic analysis purposes:
+*   **Satellite Imagery**: [ESRI World Imagery](https://www.esri.com/en-us/arcgis/products/location-services/services/basemaps)
+*   **Street Maps**: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors
+*   **Terrain Data**: [Mapzen Terrarium](https://github.com/tilezen/joerd/blob/master/docs/terrarium.md) via Amazon S3, [OpenTopoData](https://www.opentopodata.org/), and [Open-Elevation](https://open-elevation.com/).
 
 ---
 
