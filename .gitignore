@@ -36,7 +36,11 @@ INAV_Flight_View.spec
 
 # Data files (Optional: ignore if you don't want to share your personal logs)
 Logfiles/
+Logs - Ardu/
+Logs - INAV/
+Logs - EdgeTX/
 *.csv
+
 *.txt
 *.cfg
 !defaults.cfg
