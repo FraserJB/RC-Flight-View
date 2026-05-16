@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+.venv/
+ENV/
+
+# INAV Flight View Specific
+map_cache/
+*.log
+*.zip
+blackbox-tools/
+blackbox-tools.zip
+INAV_Flight_View.spec
+
+# Data files (Optional: ignore if you don't want to share your personal logs)
+Logfiles/
+*.csv
+*.txt
+*.cfg
+!defaults.cfg
+!defaults_*.cfg
+
+current_map.jpg
+all.log
+crash.log
+
+# Temporary and Test files
+scratch/
+test.png
+test_*.jpg
