@@ -18,7 +18,7 @@ import hashlib
 import pyvista as pv
 from pyvistaqt import QtInteractor
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
-from PyQt6.QtCore import pyqtSignal, QEvent, Qt, QTimer
+from PyQt6.QtCore import pyqtSignal, QEvent, Qt, QTimer, QPoint
 import numpy as np
 from PIL import Image, ImageEnhance
 from mesh_utils import create_aircraft_mesh
@@ -61,6 +61,17 @@ class Viewer3D(QWidget):
         self.plotter.set_background("#1e1e1e") # Darker gray
         self.plotter.add_axes(line_width=2, labels_off=False)
         self.plotter.view_isometric()
+        
+        # Add persistent attribution text (Bottom Right)
+        self.attribution_text = "Map data: ESRI, OSM, Mapzen, OpenTopoData, Open-Elevation"
+        self.attribution_actor = self.plotter.add_text(
+            self.attribution_text, 
+            position='lower_right', 
+            font_size=8, 
+            color='gray', 
+            shadow=True,
+            name="attribution"
+        )
         
         # Add a small takeoff marker
         takeoff_marker = pv.Sphere(radius=1.0, center=(0, 0, 0))
@@ -131,6 +142,13 @@ class Viewer3D(QWidget):
             adjusted = ImageEnhance.Brightness(img).enhance(brightness)
             adjusted = ImageEnhance.Contrast(adjusted).enhance(contrast)
 
+            cache_key = hashlib.md5(f"{abs_path}_{os.path.getmtime(abs_path):.6f}_{brightness:.3f}_{contrast:.3f}".encode()).hexdigest()[:10]
+            cache_dir = "map_cache"
+            if not os.path.exists(cache_dir):
+                os.makedirs(cache_dir)
+            out_path = os.path.join(cache_dir, f"current_map_render_{cache_key}.jpg")
+            adjusted.save(out_path, quality=92)
+            return out_path
         except Exception:
             return abs_path
 
@@ -317,7 +335,8 @@ class Viewer3D(QWidget):
         plane.texture_map_to_plane(inplace=True)
         
         try:
-            texture = pv.read_texture(self._prepare_map_texture(texture_path))
+            texture_path_processed = self._prepare_map_texture(texture_path)
+            texture = pv.read_texture(texture_path_processed)
             # Render map textures unlit.  The image is normalized above, so OSM
             # stays readable and satellite imagery does not get crushed.
             self.map_actor = self.plotter.add_mesh(plane, texture=texture, name="map", 
@@ -416,7 +435,8 @@ class Viewer3D(QWidget):
             )
             self.terrain_actor.SetVisibility(not self.map_visible)
 
-            texture = pv.read_texture(self._prepare_map_texture(texture_path))
+            texture_path_processed = self._prepare_map_texture(texture_path)
+            texture = pv.read_texture(texture_path_processed)
             # Keep texture colors stable; terrain shape remains visible through
             # geometry, path depth, and the separate mesh actor when the map is off.
             self.map_actor = self.plotter.add_mesh(terrain, texture=texture, name="map", 
