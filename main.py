@@ -106,7 +106,7 @@ from custom_url_dialog import CustomUrlDialog
 from units_dialog import UnitsDialog
 from unit_utils import apply_units_to_df, DEFAULT_UNITS
 
-from parameters_config import INAV_PARAMS, ARDUPILOT_PARAMS, EDGETX_PARAMS, ENCODED_PARAMS, ARDUPILOT_ENCODED_PARAMS
+from parameters_config import INAV_PARAMS, ARDUPILOT_PARAMS, EDGETX_PARAMS, GPX_PARAMS, ENCODED_PARAMS, ARDUPILOT_ENCODED_PARAMS
 
 import matplotlib
 matplotlib.rcParams['font.size'] = 8
@@ -118,10 +118,12 @@ class TimeSlider(QSlider):
         self.duration_s = 0
         self.start_time_us = 0
         self.df = None
+        self.log_type = 'inav'
         self.setMinimumHeight(40) # Extra space for labels
 
-    def set_data(self, df):
+    def set_data(self, df, log_type='inav'):
         self.df = df
+        self.log_type = log_type
         if df is not None and len(df) > 0:
             self.start_time_us = df['time (us)'].iloc[0]
             self.duration_s = (df['time (us)'].iloc[-1] - self.start_time_us) / 1e6
@@ -148,22 +150,65 @@ class TimeSlider(QSlider):
         w = self.width() - 20 
         offset = 10
         
-        for s in range(0, int(self.duration_s) + 1, 15):
-            # Simple linear approximation is usually enough for ticks
-            ratio = s / self.duration_s
-            x = int(offset + ratio * w)
-            
-            if s % 60 == 0:
-                # 1 minute major marker
-                painter.setPen(QColor("#888888"))
-                painter.drawLine(x, 28, x, 36)
-                if s > 0:
-                    m = s // 60
-                    painter.drawText(x - 10, 39, f"{m}m")
-            else:
-                # 15 second minor marker
-                painter.setPen(QColor("#555555"))
-                painter.drawLine(x, 32, x, 36)
+        is_gpx = (self.log_type == 'gpx')
+        
+        if is_gpx:
+            # Dynamically calculate intervals based on GPX duration
+            dur_mins = self.duration_s / 60.0
+            if dur_mins > 120:  # > 2 hours: major 1 hour, minor 15 mins
+                major_s = 3600
+                minor_s = 900
+                label_format = "h"
+            elif dur_mins > 30:  # 30 mins to 2 hours: major 30 mins, minor 5 mins
+                major_s = 1800
+                minor_s = 300
+                label_format = "m"
+            else:  # < 30 minutes: major 5 mins, minor 1 min
+                major_s = 300
+                minor_s = 60
+                label_format = "m"
+                
+            for s in range(0, int(self.duration_s) + 1, minor_s):
+                ratio = s / self.duration_s
+                x = int(offset + ratio * w)
+                
+                if s % major_s == 0:
+                    # Major marker
+                    painter.setPen(QColor("#888888"))
+                    painter.drawLine(x, 28, x, 36)
+                    if s > 0:
+                        if label_format == "h":
+                            h = s / 3600.0
+                            if h.is_integer():
+                                lbl = f"{int(h)}h"
+                            else:
+                                lbl = f"{h:.1f}h"
+                        else:
+                            m = s // 60
+                            lbl = f"{m}m"
+                        painter.drawText(x - 10, 39, lbl)
+                else:
+                    # Minor marker
+                    painter.setPen(QColor("#555555"))
+                    painter.drawLine(x, 32, x, 36)
+        else:
+            # Standard flight log timeline ticks
+            for s in range(0, int(self.duration_s) + 1, 15):
+                ratio = s / self.duration_s
+                x = int(offset + ratio * w)
+                
+                if s % 60 == 0:
+                    # 1 minute major marker
+                    painter.setPen(QColor("#888888"))
+                    painter.drawLine(x, 28, x, 36)
+                    if s > 0:
+                        m = s // 60
+                        painter.drawText(x - 10, 39, f"{m}m")
+                else:
+                    # 15 second minor marker
+                    painter.setPen(QColor("#555555"))
+                    painter.drawLine(x, 32, x, 36)
+                    
         painter.end()
 
 
@@ -245,6 +290,7 @@ class MainWindow(QMainWindow):
         # Load persistent settings
         self.load_config()
         self.update_flags_button_state()
+        self.setAcceptDrops(True)
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.next_frame)
@@ -293,10 +339,27 @@ class MainWindow(QMainWindow):
                     self.param_config = [dict(p) for p in ARDUPILOT_PARAMS]
                 elif self.log_type == 'edgetx':
                     self.param_config = [dict(p) for p in EDGETX_PARAMS]
+                elif self.log_type == 'gpx':
+                    self.param_config = [dict(p) for p in GPX_PARAMS]
                 else:
                     self.param_config = [dict(p) for p in INAV_PARAMS]
                 self.load_config()
                 self.update_flags_button_state()
+                if self.log_type == 'gpx':
+                    self.lbl_mode.hide()
+                    self.lbl_nav.hide()
+                    self.chk_inv_roll.hide()
+                    self.chk_inv_pitch.hide()
+                    self.chk_inv_yaw.hide()
+                else:
+                    self.lbl_mode.show()
+                    if self.log_type != 'ardupilot':
+                        self.lbl_nav.show()
+                    else:
+                        self.lbl_nav.hide()
+                    self.chk_inv_roll.show()
+                    self.chk_inv_pitch.show()
+                    self.chk_inv_yaw.show()
                 
                 self.raw_df = self.data_parser.get_data()
                 self.apply_units()
@@ -312,7 +375,10 @@ class MainWindow(QMainWindow):
                 # Swap version selector items based on firmware type
                 self.version_selector.blockSignals(True)
                 self.version_selector.clear()
-                if self.log_type == 'ardupilot':
+                if self.log_type == 'gpx':
+                    self.version_selector.addItems(["GPX"])
+                    self.version_selector.setCurrentIndex(0)
+                elif self.log_type == 'ardupilot':
                     vehicle = getattr(self.data_parser, 'vehicle_type', 'ArduPlane')
                     self.version_selector.addItems([vehicle])
                     self.version_selector.setCurrentIndex(0)
@@ -370,12 +436,16 @@ class MainWindow(QMainWindow):
                     present_motors = sum(1 for c in motor_cols if self.df[c].max() > 0)
                     active_motors = max(active_motors, min(4, present_motors))
 
-                has_gps = 'Yes' if 'GPS_coord[0]' in self.df.columns else 'No'
-                self.lbl_summary.setText(f"Type: {ac_type} | Motors: {active_motors} | Servos: {active_servos} | GPS: {has_gps}")
-                self.btn_aircraft_info.setEnabled(True)
+                if self.log_type == 'gpx':
+                    self.lbl_summary.setText("Type: Athlete | Sport: Running/Walking")
+                    self.btn_aircraft_info.setEnabled(False)
+                else:
+                    has_gps = 'Yes' if 'GPS_coord[0]' in self.df.columns else 'No'
+                    self.lbl_summary.setText(f"Type: {ac_type} | Motors: {active_motors} | Servos: {active_servos} | GPS: {has_gps}")
+                    self.btn_aircraft_info.setEnabled(True)
                 
-                # Hide Nav label for ArduPilot/EdgeTX as it's redundant or unavailable
-                if self.log_type in ['ardupilot', 'edgetx']:
+                # Hide Nav label for ArduPilot/EdgeTX/GPX as it's redundant or unavailable
+                if self.log_type in ['ardupilot', 'edgetx', 'gpx']:
                     self.lbl_nav.hide()
                 else:
                     self.lbl_nav.show()
@@ -385,6 +455,12 @@ class MainWindow(QMainWindow):
                 self.slider.setValue(0)
                 self.slider.setEnabled(True)
                 self.btn_play.setEnabled(True)
+                
+                # Swap 3D actor mesh based on log type
+                if self.log_type == 'gpx':
+                    self.viewer_3d.set_mesh_type('runner')
+                else:
+                    self.viewer_3d.set_mesh_type('aircraft')
                 
                 # Update Path in 3D
                 points = self.df[['pos_x', 'pos_y', 'pos_z']].values
@@ -415,7 +491,7 @@ class MainWindow(QMainWindow):
                 
                 # Update TimeSlider and Total Label
                 total_s = (self.df['time (us)'].iloc[-1] - self.df['time (us)'].iloc[0]) / 1e6
-                self.slider.set_data(self.df)
+                self.slider.set_data(self.df, self.log_type)
                 
                 tm, ts = divmod(total_s, 60)
                 th, tm = divmod(tm, 60)
@@ -439,9 +515,26 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 progress.cancel()
                 import traceback
-                error_msg = f"Error loading file: {e}\n\n{traceback.format_exc()}"
-                print(error_msg)
-                QMessageBox.critical(self, "Error Loading File", f"Failed to load the log file.\n\n{e}")
+                traceback.print_exc()
+                
+                # Check file extension to provide helpful details
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext == '.csv':
+                    err_details = "The selected CSV file does not match the expected EdgeTX telemetry log format (missing Date/Time or telemetry columns)."
+                elif ext == '.gpx':
+                    err_details = "The selected GPX file does not contain valid trackpoint coordinates or is corrupted."
+                elif ext in ['.txt', '.bbl']:
+                    err_details = "The selected file is not a valid INAV Blackbox log file."
+                elif ext == '.bin':
+                    err_details = "The selected file is not a valid ArduPilot DataFlash binary log."
+                else:
+                    err_details = f"The file structure is unrecognized or corrupted.\nDetails: {str(e)}"
+                
+                QMessageBox.critical(
+                    self, 
+                    "Invalid Log File", 
+                    f"Failed to open '{os.path.basename(file_path)}'.\n\n{err_details}"
+                )
 
     def handle_missing_blackbox_decode(self, file_path):
         dlg = QDialog(self)
@@ -855,10 +948,11 @@ class MainWindow(QMainWindow):
             return resource_path(filename)
 
 
-        # Use separate config files for INAV vs ArduPilot vs EdgeTX
+        # Use separate config files for INAV vs ArduPilot vs EdgeTX vs GPX
         lt = getattr(self, 'log_type', 'inav')
         if lt == 'ardupilot': cfg_name = "defaults_ardu.cfg"
         elif lt == 'edgetx': cfg_name = "defaults_edge.cfg"
+        elif lt == 'gpx': cfg_name = "defaults_gpx.cfg"
         else: cfg_name = "defaults_inav.cfg"
         
         config_path = get_cfg_full_path(cfg_name)
@@ -938,6 +1032,9 @@ class MainWindow(QMainWindow):
                 # Add saved params in their saved order if they still exist in the code definitions
                 for saved_p in saved_config:
                     p_id = saved_p['param']
+                    # Skip invalid/unwanted columns for GPX files to keep user interface clean
+                    if lt == 'gpx' and p_id in ['attitude[0]', 'attitude[1]', 'attitude[2]', 'GPS_coord[0]', 'GPS_coord[1]']:
+                        continue
                     if p_id in current_params_map:
                         p_item = current_params_map.pop(p_id)
                         p_item['plot'] = saved_p.get('plot', p_item['plot'])
@@ -992,6 +1089,16 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'rc_overlay'):
                 self.rc_overlay.setVisible(self.chk_sticks.isChecked())
 
+            # For GPX logs, strictly exclude any non-GPX flight parameters from the config list
+            if getattr(self, 'log_type', 'inav') == 'gpx':
+                gpx_valid_params = {
+                    'pos_z', 'altitude_m', 'GPS_altitude', 'GPS_speed (m/s)', 'pace (min/km)',
+                    'GAP (min/km)', 'slope (%)', 'heart_rate', 'cadence', 'stride_length (m)',
+                    'climb_rate (m/min)', 'attitude[0]', 'attitude[1]', 'attitude[2]'
+                }
+                self.param_config = [p for p in self.param_config if p['param'] in gpx_valid_params]
+                self.plot_widget.update_params_config(self.param_config)
+
         except Exception as e:
             print(f"Error loading config: {e}")
         finally:
@@ -1041,6 +1148,7 @@ class MainWindow(QMainWindow):
             lt = getattr(self, 'log_type', 'inav')
             if lt == 'ardupilot': cfg_name = "defaults_ardu.cfg"
             elif lt == 'edgetx': cfg_name = "defaults_edge.cfg"
+            elif lt == 'gpx': cfg_name = "defaults_gpx.cfg"
             else: cfg_name = "defaults_inav.cfg"
             
             config_path = get_cfg_full_path(cfg_name)
@@ -1049,7 +1157,7 @@ class MainWindow(QMainWindow):
                 json.dump(config, f, indent=4)
                 
             # Always synchronize "Global" settings to the OTHER config files as well
-            other_configs = ["defaults_inav.cfg", "defaults_ardu.cfg", "defaults_edge.cfg"]
+            other_configs = ["defaults_inav.cfg", "defaults_ardu.cfg", "defaults_edge.cfg", "defaults_gpx.cfg"]
             if cfg_name in other_configs:
                 other_configs.remove(cfg_name)
                 
@@ -1121,9 +1229,9 @@ class MainWindow(QMainWindow):
             # Update the 3D path mesh FIRST so it matches the new df row count
             # before any trail/scalar updates reference it
             if hasattr(self, 'viewer_3d') and 'pos_x' in self.df.columns:
-                dist_unit = self.unit_prefs.get('Distance', 'm')
                 height_unit = self.unit_prefs.get('Height', 'm')
-                self.viewer_3d.update_grid_units(dist_unit, height_unit)
+                # Use height_unit for both horizontal and vertical axes to preserve a perfect 1:1:1 aspect ratio
+                self.viewer_3d.update_grid_units(height_unit, height_unit)
                 
                 points = self.df[['pos_x', 'pos_y', 'pos_z']].values
                 self.viewer_3d.set_path(points, reset_camera=False)
@@ -1150,6 +1258,102 @@ class MainWindow(QMainWindow):
         speed_unit = self.unit_prefs.get('Speed', 'mph')
         
         raw = self.raw_df
+        
+        # Check if GPX log is loaded and render athletic stats instead
+        if getattr(self, 'log_type', 'inav') == 'gpx':
+            stats = []
+            
+            # 1. Date & Start Time
+            act_date = getattr(self.data_parser, 'activity_date', 'Unknown')
+            act_time = getattr(self.data_parser, 'activity_start_time', 'Unknown')
+            stats.append(f"Date: {act_date}")
+            stats.append(f"Start: {act_time}")
+            
+            # 2. Total Distance
+            if 'distance_m' in raw.columns:
+                total_dist_m = raw['distance_m'].iloc[-1]
+                conv_dist, actual_unit = convert_value(total_dist_m, "Distance", "m", dist_unit)
+                if actual_unit == "m":
+                    conv_dist = total_dist_m / 1000.0
+                    actual_unit = "km"
+                elif actual_unit == "ft":
+                    conv_dist = total_dist_m / 1609.344
+                    actual_unit = "miles"
+                stats.append(f"Distance: {conv_dist:.2f} {actual_unit}")
+                
+            # 3. Moving Time / Duration
+            if 'time (us)' in raw.columns:
+                total_s = (raw['time (us)'].iloc[-1] - raw['time (us)'].iloc[0]) / 1e6
+                tm, ts = divmod(total_s, 60)
+                th, tm = divmod(tm, 60)
+                if th > 0:
+                    stats.append(f"Time: {int(th):d}h{int(tm):02d}m{int(ts):02d}s")
+                else:
+                    stats.append(f"Time: {int(tm):02d}m{int(ts):02d}s")
+                    
+            # 4. Ascent & Descent
+            if 'altitude_m' in raw.columns:
+                alt = raw['altitude_m']
+                diffs = alt.diff().fillna(0)
+                ascent = diffs[diffs > 0].sum()
+                descent = (-diffs[diffs < 0]).sum()
+                
+                conv_asc, _ = convert_value(ascent, "Height", "m", height_unit)
+                conv_desc, _ = convert_value(descent, "Height", "m", height_unit)
+                stats.append(f"Ascent/Descent: +{conv_asc:.1f}/-{conv_desc:.1f}{height_unit}")
+                
+            # 5. Average & Max Pace
+            if 'pace (min/km)' in raw.columns:
+                def format_pace(decimal_pace, unit_str):
+                    if decimal_pace >= 20.0 or not np.isfinite(decimal_pace):
+                        return "--:--"
+                    minutes = int(decimal_pace)
+                    seconds = int(round((decimal_pace - minutes) * 60.0))
+                    if seconds >= 60:
+                        minutes += 1
+                        seconds -= 60
+                    return f"{minutes}:{seconds:02d}/{unit_str}"
+                    
+                if 'GPS_speed (m/s)' in raw.columns:
+                    avg_speed = raw['GPS_speed (m/s)'].mean()
+                    if avg_speed > 0.1:
+                        avg_pace_min_km = 1000.0 / (avg_speed * 60.0)
+                        max_speed = raw['GPS_speed (m/s)'].max()
+                        max_pace_min_km = 1000.0 / (max_speed * 60.0) if max_speed > 0.1 else 20.0
+                        
+                        pace_unit = "km"
+                        if dist_unit in ["miles", "ft"]:
+                            avg_pace = avg_pace_min_km * 1.609344
+                            max_pace = max_pace_min_km * 1.609344
+                            pace_unit = "mi"
+                        else:
+                            avg_pace = avg_pace_min_km
+                            max_pace = max_pace_min_km
+                            
+                        stats.append(f"Avg Pace: {format_pace(avg_pace, pace_unit)}")
+                        stats.append(f"Best Pace: {format_pace(max_pace, pace_unit)}")
+                        
+            # 6. Heart Rate
+            if 'heart_rate' in raw.columns and raw['heart_rate'].max() > 0:
+                stats.append(f"Avg/Max HR: {int(round(raw['heart_rate'].mean()))}/{int(raw['heart_rate'].max())} bpm")
+                
+            # 7. Cadence
+            if 'cadence' in raw.columns and raw['cadence'].max() > 0:
+                stats.append(f"Avg Cadence: {int(round(raw['cadence'].mean()))} spm")
+                
+            # 8. Stride Length
+            if 'stride_length (m)' in raw.columns and raw['stride_length (m)'].max() > 0:
+                stride_active = raw.loc[raw['GPS_speed (m/s)'] > 0.5, 'stride_length (m)']
+                if not stride_active.empty:
+                    avg_stride = stride_active.mean()
+                    conv_stride, _ = convert_value(avg_stride, "Height", "m", height_unit)
+                    stats.append(f"Avg Stride: {conv_stride:.2f}{height_unit}")
+            
+            separator = "   \u2502   "
+            self.lbl_flight_stats.setText(separator.join(stats))
+            self.centralWidget().update()
+            return
+
         stats = []
         
         # Helper to format with unit
@@ -1647,18 +1851,25 @@ class MainWindow(QMainWindow):
             
             # Re-apply units to the loaded data and refresh display
             if self.raw_df is not None:
+                # 1. Re-scale existing map first so that the terrain grid coordinates match the new units
+                self._rescale_map()
+                
+                # 2. Re-apply units to loaded data (which sets path and correctly looks up terrain heights)
                 current_time = self.df['time (us)'].iloc[self.current_idx] if self.df is not None and len(self.df) > self.current_idx else 0
                 self.apply_units()
                 
-                # Update UI elements
+                # 3. Reset 3D camera to fit the newly scaled scene coordinates
+                if hasattr(self, 'viewer_3d'):
+                    self.viewer_3d.plotter.reset_camera()
+                    self.viewer_3d.plotter.view_isometric()
+                    self.viewer_3d.render()
+                
+                # 4. Update UI elements
                 self.update_display(self.current_idx)
                 if self.flag_viewer and self.flag_viewer.isVisible():
                     self.flag_viewer.set_data(self.df)
                     row = self.df.iloc[self.current_idx]
                     self.flag_viewer.update_flags(row)
-                    
-                # Re-scale existing map if loaded (no re-download needed)
-                self._rescale_map()
 
     def apply_dark_theme(self):
         self.setStyleSheet("""
@@ -1715,9 +1926,28 @@ class MainWindow(QMainWindow):
             }
         """)
 
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls:
+                file_path = urls[0].toLocalFile()
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext in ['.txt', '.bbl', '.bin', '.csv', '.gpx']:
+                    event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls:
+                file_path = urls[0].toLocalFile()
+                if os.path.exists(file_path):
+                    ext = os.path.splitext(file_path)[1].lower()
+                    if ext in ['.txt', '.bbl', '.bin', '.csv', '.gpx']:
+                        self.load_log_file(file_path)
+
     def open_file(self):
         start_dir = getattr(self, 'last_log_dir', '') or ''
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Flight Log", start_dir, "Flight Logs (*.TXT *.BBL *.BIN *.CSV);;INAV Blackbox (*.TXT *.BBL);;ArduPilot DataFlash (*.BIN);;EdgeTX Telemetry (*.CSV);;All Files (*)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Flight Log", start_dir, "Flight Logs (*.TXT *.BBL *.BIN *.CSV *.GPX);;INAV Blackbox (*.TXT *.BBL);;ArduPilot DataFlash (*.BIN);;EdgeTX Telemetry (*.CSV);;GPX Activities (*.GPX);;All Files (*)")
         if file_path:
             self.last_log_dir = os.path.dirname(file_path)
             self.save_config()
@@ -1811,25 +2041,38 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'btn_flags'):
             return
 
-        flags_available = getattr(self, 'log_type', 'inav') != 'edgetx'
+        flags_available = getattr(self, 'log_type', 'inav') not in ['edgetx', 'gpx']
         self.btn_flags.setEnabled(flags_available)
         if flags_available:
             self.btn_flags.setToolTip("Open Flag and State Viewer")
         else:
-            self.btn_flags.setToolTip("EdgeTX telemetry logs do not include decoded flag parameters.")
+            if getattr(self, 'log_type', 'inav') == 'edgetx':
+                self.btn_flags.setToolTip("EdgeTX telemetry logs do not include decoded flag parameters.")
+            else:
+                self.btn_flags.setToolTip("GPX logs do not include decoded flag parameters.")
             if getattr(self, 'flag_viewer', None) is not None and self.flag_viewer.isVisible():
                 self.flag_viewer.close()
 
     def open_param_selector(self):
         # Prepare lookup for descriptions etc
-        base_params = ARDUPILOT_PARAMS if self.log_type == 'ardupilot' else INAV_PARAMS
+        if self.log_type == 'ardupilot':
+            base_params = ARDUPILOT_PARAMS
+        elif self.log_type == 'edgetx':
+            base_params = EDGETX_PARAMS
+        elif self.log_type == 'gpx':
+            base_params = GPX_PARAMS
+        else:
+            base_params = INAV_PARAMS
         all_params_info = {p['param']: p for p in base_params}
         
         # If we have a log loaded, we might want to add ANY missing columns from the log to the config
         if self.df is not None:
             existing_params = [p['param'] for p in self.param_config]
+            exclude_cols = ['time (us)', 'pos_x', 'pos_y', 'pos_z']
+            if self.log_type == 'gpx':
+                exclude_cols.extend(['attitude[0]', 'attitude[1]', 'attitude[2]', 'GPS_coord[0]', 'GPS_coord[1]'])
             for col in self.df.columns:
-                if col not in existing_params and col not in ['time (us)', 'pos_x', 'pos_y', 'pos_z']:
+                if col not in existing_params and col not in exclude_cols:
                     new_item = {
                         "name": col, 
                         "param": col, 
@@ -2047,13 +2290,14 @@ class MainWindow(QMainWindow):
 
     def _apply_map_with_units(self, map_path, x_min, x_max, y_min, y_max, elevations=None):
         """Apply unit conversion to meter-based bounds and update the 3D map."""
-        dist_unit = self.unit_prefs.get('Distance', 'm')
-        if dist_unit != 'm':
+        # Use height_unit for horizontal grid coordinates to preserve 1:1:1 aspect ratio
+        height_unit = self.unit_prefs.get('Height', 'm')
+        if height_unit != 'm':
             from unit_utils import convert_value
-            x_min, _ = convert_value(x_min, 'Distance', 'm', dist_unit)
-            x_max, _ = convert_value(x_max, 'Distance', 'm', dist_unit)
-            y_min, _ = convert_value(y_min, 'Distance', 'm', dist_unit)
-            y_max, _ = convert_value(y_max, 'Distance', 'm', dist_unit)
+            x_min, _ = convert_value(x_min, 'Height', 'm', height_unit)
+            x_max, _ = convert_value(x_max, 'Height', 'm', height_unit)
+            y_min, _ = convert_value(y_min, 'Height', 'm', height_unit)
+            y_max, _ = convert_value(y_max, 'Height', 'm', height_unit)
 
         if elevations is not None:
             elevations = np.asarray(elevations, dtype=float)
@@ -2259,28 +2503,33 @@ class MainWindow(QMainWindow):
             self.lbl_telemetry.setText(f"X:{pos[0]:.1f}{dist_unit} Y:{pos[1]:.1f}{dist_unit} Z:{pos[2]:.1f}{height_unit}")
             
             # Update Modes
-            mode_flags = str(row.get('flightModeFlags (flags)', '---'))
-            self.lbl_mode.setText(f"Mode: {mode_flags}")
-            
-            # Update Nav Mode
-            if self.log_type == 'ardupilot':
-                # ArduPilot: mode is already a readable string; no separate navState
-                if self.lbl_nav.isVisible():
-                    self.lbl_nav.hide()
+            if self.log_type == 'gpx':
+                if self.lbl_mode.isVisible(): self.lbl_mode.hide()
+                if self.lbl_nav.isVisible(): self.lbl_nav.hide()
             else:
-                if not self.lbl_nav.isVisible():
-                    self.lbl_nav.show()
-                nav_state = row.get('navState', 0)
-                if hasattr(nav_state, 'iloc'): nav_state = nav_state.iloc[0]
+                if not self.lbl_mode.isVisible(): self.lbl_mode.show()
+                mode_flags = str(row.get('flightModeFlags (flags)', '---'))
+                self.lbl_mode.setText(f"Mode: {mode_flags}")
                 
-                version = self.version_selector.currentText()
-                # Use definitions from flag_viewer to be consistent
-                from flag_viewer import get_flag_params
-                params = get_flag_params(version)
-                nav_map = params.get("navState", ("enum", {}))[1]
+                # Update Nav Mode
+                if self.log_type == 'ardupilot':
+                    # ArduPilot: mode is already a readable string; no separate navState
+                    if self.lbl_nav.isVisible():
+                        self.lbl_nav.hide()
+                else:
+                    if not self.lbl_nav.isVisible():
+                        self.lbl_nav.show()
+                    nav_state = row.get('navState', 0)
+                    if hasattr(nav_state, 'iloc'): nav_state = nav_state.iloc[0]
                     
-                nav_name = nav_map.get(int(nav_state), f"STATE_{int(nav_state)}")
-                self.lbl_nav.setText(f"Nav: {nav_name} ({int(nav_state)})")
+                    version = self.version_selector.currentText()
+                    # Use definitions from flag_viewer to be consistent
+                    from flag_viewer import get_flag_params
+                    params = get_flag_params(version)
+                    nav_map = params.get("navState", ("enum", {}))[1]
+                        
+                    nav_name = nav_map.get(int(nav_state), f"STATE_{int(nav_state)}")
+                    self.lbl_nav.setText(f"Nav: {nav_name} ({int(nav_state)})")
             
             # Update Time Label
             elapsed_us = row['time (us)'] - self.df['time (us)'].iloc[0]

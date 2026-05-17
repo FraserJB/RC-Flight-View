@@ -257,6 +257,25 @@ class PlotWidget(QWidget):
             ax.tick_params(axis='both', colors='white', labelsize=self._last_fs-1)
             ax.grid(True, color='#333333', linestyle='--', alpha=0.5)
             
+            if not is_flag_plot:
+                import matplotlib.ticker as ticker
+                def comma_tick_formatter(x, pos):
+                    try:
+                        val_float = float(x)
+                        if abs(val_float) >= 1000:
+                            if val_float == int(val_float):
+                                return f"{int(val_float):,}"
+                            else:
+                                return f"{val_float:,.1f}"
+                        else:
+                            if val_float == int(val_float):
+                                return f"{int(val_float)}"
+                            s = f"{val_float:.3f}".rstrip('0').rstrip('.')
+                            return s if s else "0"
+                    except Exception:
+                        return str(x)
+                ax.yaxis.set_major_formatter(ticker.FuncFormatter(comma_tick_formatter))
+            
             # We'll use the ylabel object itself to update text later
             self.value_texts.append(ax.yaxis.label)
             
@@ -304,6 +323,8 @@ class PlotWidget(QWidget):
         wrap_width = max(8, int((axis_height_px * 0.90) / max(1, char_advance_px)))
         
         needs_tick_update = False
+
+
         if getattr(self, '_last_fs', None) != fs:
             self._last_fs = fs
             needs_tick_update = True
@@ -335,9 +356,20 @@ class PlotWidget(QWidget):
                 val_display = f"{int(val)} ({mapping[int(val)]})"
             else:
                 try:
-                    val_display = f"{float(val):.1f} {unit}"
+                    val_float = float(val)
+                    if abs(val_float) >= 1000:
+                        if val_float == int(val_float):
+                            val_str = f"{int(val_float):,}"
+                        else:
+                            val_str = f"{val_float:,.1f}"
+                    else:
+                        if val_float == int(val_float):
+                            val_str = f"{int(val_float)}"
+                        else:
+                            val_str = f"{val_float:.1f}"
+                    val_display = f"{val_str} {unit}" if unit else val_str
                 except (ValueError, TypeError):
-                    val_display = f"{val} {unit}"
+                    val_display = f"{val} {unit}" if unit else str(val)
                     
             if i in self.flag_texts:
                 active, errors = decode_flag_value(col, val, self.params)
@@ -362,7 +394,7 @@ class PlotWidget(QWidget):
             if needs_tick_update:
                 self.value_texts[i].set_fontsize(self._last_fs)
                 self.axes[i].tick_params(axis='both', labelsize=self._last_fs-1)
-        
+                
         self.canvas.draw_idle()
 
     def _on_click(self, event):

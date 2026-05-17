@@ -31,10 +31,10 @@ def get_unit_category(param_name, base_unit):
         elif "EPH" in param_name or "navPos" in param_name:
             return "Distance"
             
-    if param_name in ["pos_z", "GPS_altitude", "Altitude (Rel)", "GPS Altitude (MSL)"] or "Altitude" in param_name:
+    if param_name in ["pos_x", "pos_y", "pos_z", "GPS_altitude", "Altitude (Rel)", "GPS Altitude (MSL)", "cumulative_gain_m"] or "Altitude" in param_name or "gain" in param_name.lower() or "stride" in param_name.lower():
         return "Height"
         
-    if param_name in ["pos_x", "pos_y", "distance_to_home"] or "Distance" in param_name:
+    if param_name in ["distance_to_home", "distance_m"] or "Distance" in param_name:
         return "Distance"
         
     if "Temp" in param_name:
@@ -42,6 +42,9 @@ def get_unit_category(param_name, base_unit):
         
     if base_unit == "m/s" or "Speed" in param_name or "Wind" in param_name:
         return "Speed"
+        
+    if "pace" in param_name.lower() or "GAP" in param_name:
+        return "Pace"
         
     return None
 
@@ -90,6 +93,16 @@ def convert_value(val, category, current_unit, target_unit):
         elif current_unit == "F" and target_unit == "C":
             return (val - 32) * 5/9, "C"
             
+    elif category == "Pace":
+        # Convert everything to min/km first
+        m_val = val
+        if current_unit in ["min/mi", "min/mile"]:
+            m_val = val / 1.609344
+            
+        # Convert min/km to target
+        if target_unit == "min/km": return m_val, "min/km"
+        elif target_unit in ["min/mi", "min/mile"]: return m_val * 1.609344, "min/mi"
+            
     return val, current_unit
 
 def apply_units_to_df(df_raw, param_config, unit_prefs):
@@ -99,6 +112,16 @@ def apply_units_to_df(df_raw, param_config, unit_prefs):
     """
     if df_raw is None:
         return None, param_config
+        
+    # Ensure Pace target unit tracks Distance target unit
+    if "Distance" in unit_prefs:
+        dist_pref = unit_prefs["Distance"]
+        if dist_pref in ["miles", "ft"]:
+            unit_prefs["Pace"] = "min/mi"
+        else:
+            unit_prefs["Pace"] = "min/km"
+    else:
+        unit_prefs["Pace"] = "min/km"
         
     df = df_raw.copy()
     new_config = []
@@ -133,10 +156,12 @@ def apply_units_to_df(df_raw, param_config, unit_prefs):
         new_config.append(new_p)
         
     # Fallback: ensure pos_x, pos_y, pos_z are converted even if not in param_config
+    # Note: We convert pos_x and pos_y using the "Height" category (instead of "Distance")
+    # to preserve a perfect 1:1:1 aspect ratio in the 3D Viewer space.
     for col in ['pos_x', 'pos_y', 'pos_z']:
         if col in df.columns and col not in converted_cols:
             base_unit = 'm'
-            category = "Distance" if col in ['pos_x', 'pos_y'] else "Height"
+            category = "Height"
             if category in unit_prefs:
                 target_unit = unit_prefs[category]
                 if base_unit != target_unit:

@@ -8,6 +8,7 @@ added_files = [
     ('defaults_ardu.cfg', '.'),
     ('defaults_inav.cfg', '.'),
     ('defaults_edge.cfg', '.'),
+    ('defaults_gpx.cfg', '.'),
     ('icon.png', '.'),
     ('LICENSE', '.')
 ]

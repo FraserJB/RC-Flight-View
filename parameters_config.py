@@ -524,6 +524,22 @@ EDGETX_PARAMS = [
     {"name": "Flight Mode", "param": "flightModeFlags (flags)", "desc": "Active flight mode (numeric index from EdgeTX).", "unit": "", "color": "#ffffff", "plot": False, "can_plot": False},
 ]
 
+GPX_PARAMS = [
+    # Core Attitude & Position
+    {"name": "Altitude (Rel)", "param": "pos_z", "desc": "Relative altitude from the start point.", "unit": "m", "color": "#00ff00", "plot": True, "trail": True},
+    {"name": "Altitude (MSL)", "param": "altitude_m", "desc": "Absolute altitude above Mean Sea Level.", "unit": "m", "color": "#00ffaa", "plot": True, "trail": False},
+    {"name": "Speed", "param": "GPS_speed (m/s)", "desc": "Smoothed running or walking speed over ground.", "unit": "m/s", "color": "#00ffff", "plot": True, "trail": True},
+    {"name": "Pace", "param": "pace (min/km)", "desc": "Current pace in minutes per kilometer or mile.", "unit": "min/km", "color": "#ffaa00", "plot": True, "trail": True},
+    {"name": "Grade-Adjusted Pace", "param": "GAP (min/km)", "desc": "Pace adjusted for uphill/downhill slope to reflect equivalent flat-ground effort.", "unit": "min/km", "color": "#ff5500", "plot": True, "trail": True},
+    {"name": "Slope", "param": "slope (%)", "desc": "Smoothed physical slope or grade (%). Positive for uphill, negative for downhill.", "unit": "%", "color": "#ff00ff", "plot": False, "trail": True},
+    {"name": "Heart Rate", "param": "heart_rate", "desc": "Heart rate in beats per minute (bpm).", "unit": "bpm", "color": "#ff3333", "plot": True, "trail": True},
+    {"name": "Cadence", "param": "cadence", "desc": "Running cadence in steps per minute (spm) or cycling cadence in rpm.", "unit": "spm", "color": "#ffff00", "plot": True, "trail": True},
+    {"name": "Stride Length", "param": "stride_length (m)", "desc": "Estimated horizontal stride length.", "unit": "m", "color": "#aaff00", "plot": False, "trail": False},
+    {"name": "Climb Rate", "param": "climb_rate (m/min)", "desc": "Vertical ascent/descent rate (vario).", "unit": "m/min", "color": "#00aaff", "plot": False, "trail": False},
+    {"name": "Cumulative Distance", "param": "distance_m", "desc": "Total cumulative distance covered.", "unit": "m", "color": "#ffaa55", "plot": True, "trail": False},
+    {"name": "Cumulative Height Gain", "param": "cumulative_gain_m", "desc": "Total positive elevation climbed.", "unit": "m", "color": "#aaffaa", "plot": True, "trail": False},
+]
+
 def enrich_params(params_list, mappings=ENCODED_PARAMS):
     for p in params_list:
         if p['param'] in mappings:
@@ -536,3 +552,5 @@ def enrich_params(params_list, mappings=ENCODED_PARAMS):
 enrich_params(INAV_PARAMS)
 enrich_params(ARDUPILOT_PARAMS, ARDUPILOT_ENCODED_PARAMS)
 enrich_params(EDGETX_PARAMS)
+enrich_params(GPX_PARAMS)
+

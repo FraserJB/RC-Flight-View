@@ -1,17 +1,18 @@
   
   
-RC Flight View: Multi-Firmware Telemetry Visualization
+RC Flight View: Multi-Firmware and Activity Telemetry Visualization
 
 <img width="974" height="920" alt="image" src="https://github.com/user-attachments/assets/7fd023e4-efdf-4c4a-a822-bf4a6c60b90f" />
   
   
   
-RC Flight View is a premium, high-performance telemetry visualization tool for **INAV**, **ArduPilot**, and **EdgeTX telemetry** logs. It transforms raw flight data into an interactive 3D environment, allowing for detailed forensic analysis of every maneuver.
+RC Flight View is a premium, high-performance telemetry visualization tool for **INAV**, **ArduPilot**, **EdgeTX telemetry**, and **GPX activity** logs. It transforms raw flight and pedestrian data into an interactive 3D environment, allowing for detailed forensic analysis of every maneuver or activity.
 
-### 🛰️ Supported Firmwares
+### 🛰️ Supported Formwares / Formats
 *   **INAV Blackbox**: Full support for `.txt` logs.
 *   **ArduPilot DataFlash**: Comprehensive analysis of `.bin` logs.
 *   **EdgeTX Telemetry**: Support for `.csv` telemetry log files.
+*   **GPX Activity Logs**: Seamless tracking and plotting for `.gpx` logs.
 
 
 <img width="2003" height="1235" alt="image" src="https://github.com/user-attachments/assets/98892c5e-261d-4c35-b194-c030712cbdf5" />

@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtCore import pyqtSignal, QEvent, Qt, QTimer, QPoint
 import numpy as np
 from PIL import Image, ImageEnhance
-from mesh_utils import create_aircraft_mesh
+from mesh_utils import create_aircraft_mesh, create_runner_mesh
 
 class Viewer3D(QWidget):
     pathPointClicked = pyqtSignal(int)
@@ -62,16 +62,6 @@ class Viewer3D(QWidget):
         self.plotter.add_axes(line_width=2, labels_off=False)
         self.plotter.view_isometric()
         
-        # Add persistent attribution text (Bottom Right)
-        self.attribution_text = "Map data: ESRI, OSM, Mapzen, OpenTopoData, Open-Elevation"
-        self.attribution_actor = self.plotter.add_text(
-            self.attribution_text, 
-            position='lower_right', 
-            font_size=8, 
-            color='gray', 
-            shadow=True,
-            name="attribution"
-        )
         
         # Add a small takeoff marker
         takeoff_marker = pv.Sphere(radius=1.0, center=(0, 0, 0))
@@ -105,6 +95,21 @@ class Viewer3D(QWidget):
         self.dist_unit = dist_unit
         self.height_unit = height_unit
         self._refresh_grid()
+
+    def set_mesh_type(self, mesh_type):
+        """Swaps the 3D model between 'aircraft' and 'runner' dynamically."""
+        self.mesh_type = mesh_type
+        self.plotter.remove_actor("aircraft")
+        if mesh_type == 'runner':
+            self.aircraft_mesh = create_runner_mesh()
+            self.aircraft_actor = self.plotter.add_mesh(self.aircraft_mesh, color="#e056fd", name="aircraft")
+        else:
+            self.aircraft_mesh = create_aircraft_mesh()
+            self.aircraft_actor = self.plotter.add_mesh(self.aircraft_mesh, color="lightblue", name="aircraft")
+            
+        if self.fpv_renderer:
+            self.sync_fpv_actors()
+        self.plotter.update()
 
     def _refresh_grid(self):
         self.plotter.show_grid(color="#444444", 
@@ -183,6 +188,18 @@ class Viewer3D(QWidget):
 
     def set_path(self, points, reset_camera=True):
         """Sets the full flight path points (N, 3)."""
+        self.original_path_points = points.copy()
+        
+        if getattr(self, 'mesh_type', 'aircraft') == 'runner':
+            corrected_points = points.copy()
+            height_unit = getattr(self, 'height_unit', 'm')
+            offset_val = 3.28084 if height_unit == 'ft' else 1.0
+            for i in range(len(corrected_points)):
+                pt = corrected_points[i]
+                terrain_z = self.get_terrain_elevation(pt[0], pt[1])
+                corrected_points[i, 2] = max(pt[2], terrain_z + offset_val)
+            points = corrected_points
+            
         self.full_path_points = points
         
         # Precompute breadcrumb indices for perfectly accurate trails
@@ -211,7 +228,7 @@ class Viewer3D(QWidget):
                                                 line_width=4, name="path", render_lines_as_tubes=True,
                                                 pickable=True,
                                                 scalar_bar_args={'title': 'Altitude', 'fmt': '%.1f', 
-                                                               'bold': True, 'shadow': False,
+                                                               'bold': True, 'shadow': True, 'color': 'white',
                                                                'label_font_size': 10, 'title_font_size': 12})
         
         if self.fpv_renderer:
@@ -296,7 +313,7 @@ class Viewer3D(QWidget):
                                                 reset_camera=False,
                                                 pickable=True,
                                                 scalar_bar_args={'title': title, 'fmt': fmt, 
-                                                               'bold': True, 'shadow': False,
+                                                               'bold': True, 'shadow': True, 'color': 'white',
                                                                'label_font_size': 10, 'title_font_size': 12})
         if self.fpv_renderer:
             if self.fpv_path_actor:
@@ -388,6 +405,10 @@ class Viewer3D(QWidget):
         elevations = np.asarray(elevations, dtype=float)
         x_grid = np.asarray(x_grid, dtype=float)
         y_grid = np.asarray(y_grid, dtype=float)
+        
+        self.terrain_elevations = elevations
+        self.terrain_x_grid = x_grid
+        self.terrain_y_grid = y_grid
         if elevations.shape != x_grid.shape or elevations.shape != y_grid.shape:
             raise ValueError("Terrain elevation and coordinate grids must have matching shapes.")
 
@@ -476,8 +497,54 @@ class Viewer3D(QWidget):
                 self._refresh_grid()
                 self.plotter.reset_camera()
                 self.plotter.view_isometric()
+                
+            # Re-project the path if it's a runner and terrain has just been loaded
+            if getattr(self, 'mesh_type', 'aircraft') == 'runner' and getattr(self, 'original_path_points', None) is not None:
+                corrected_points = self.original_path_points.copy()
+                height_unit = getattr(self, 'height_unit', 'm')
+                offset_val = 3.28084 if height_unit == 'ft' else 1.0
+                for i in range(len(corrected_points)):
+                    pt = corrected_points[i]
+                    terrain_z = self.get_terrain_elevation(pt[0], pt[1])
+                    corrected_points[i, 2] = max(pt[2], terrain_z + offset_val)
+                
+                self.full_path_points = corrected_points
+                
+                # Update path mesh points
+                if self.path_mesh is not None:
+                    self.path_mesh.points = corrected_points
+                    self.path_mesh.modified()
+                    
+                # If ghost/breadcrumb exists, update it too
+                if getattr(self, 'ghost_actor', None) is not None:
+                    self._update_ghost_mesh()
         except Exception as e:
             print(f"Error loading terrain texture: {e}")
+
+    def get_terrain_elevation(self, x, y):
+        """Looks up the terrain elevation at a local X, Y coordinate."""
+        if not hasattr(self, 'terrain_elevations') or self.terrain_elevations is None:
+            return 0.0
+            
+        try:
+            # terrain_x_grid is shape (rows, cols) where rows=len(ys), cols=len(xs)
+            # x_grid has columns corresponding to xs, rows corresponding to ys
+            xs = self.terrain_x_grid[0, :]
+            ys = self.terrain_y_grid[:, 0]
+            
+            # Since xs and ys are sorted, we can find the indices closest to x and y:
+            ix = np.clip(np.searchsorted(xs, x), 0, len(xs) - 1)
+            iy = np.clip(np.searchsorted(ys, y), 0, len(ys) - 1)
+            
+            # If the closest value is actually the previous one, use it
+            if ix > 0 and abs(xs[ix-1] - x) < abs(xs[ix] - x):
+                ix -= 1
+            if iy > 0 and abs(ys[iy-1] - y) < abs(ys[iy] - y):
+                iy -= 1
+                
+            return float(self.terrain_elevations[iy, ix])
+        except Exception:
+            return 0.0
 
     def update_aircraft(self, pos, attitude, idx):
         """
@@ -490,6 +557,13 @@ class Viewer3D(QWidget):
         roll, pitch, yaw = attitude
         angle_z = 90 - yaw
         
+        pos = list(pos)
+        if getattr(self, 'mesh_type', 'aircraft') == 'runner':
+            terrain_z = self.get_terrain_elevation(pos[0], pos[1])
+            height_unit = getattr(self, 'height_unit', 'm')
+            offset_val = 3.28084 if height_unit == 'ft' else 1.0
+            pos[2] = max(pos[2], terrain_z + offset_val)
+            
         # Apply rotations and translation
         transform = pv.Transform()
         transform.rotate_x(roll)

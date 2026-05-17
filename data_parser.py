@@ -238,6 +238,8 @@ def detect_log_type(file_path):
     Returns 'inav', 'ardupilot', or 'edgetx'.
     """
     ext = os.path.splitext(file_path)[1].lower()
+    if ext == '.gpx':
+        return 'gpx'
 
     # .BIN files are always ArduPilot DataFlash
     if ext == '.bin':
@@ -286,6 +288,13 @@ def detect_and_parse(file_path, decode_exe_path=None, progress_callback=None):
         from edgetx_parser import EdgeTXParser
         parser = EdgeTXParser(file_path, progress_callback=progress_callback)
         return parser, 'edgetx'
+    elif log_type == 'gpx':
+        from gpx_parser import GPXParser
+        parser = GPXParser(file_path, progress_callback=progress_callback)
+        return parser, 'gpx'
+
+
+
     else:
         parser = DataParser(file_path, decode_exe_path=decode_exe_path,
                             progress_callback=progress_callback)
